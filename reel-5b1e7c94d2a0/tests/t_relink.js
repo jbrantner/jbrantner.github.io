@@ -123,10 +123,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await page.click('#pairOne'); await page.waitForTimeout(300);
     if(own) await page.selectOption('#prM', 'own');
     n0 = graphs().length; await page.click('#prGo'); await page.waitForTimeout(2500);
+    const card = await page.evaluate(() => { REEL.refresh(); const a = document.querySelector('#opts [data-sj]'); return a ? a.textContent : ''; });
+    await page.evaluate(() => REEL.go(2)); await page.waitForTimeout(400); const card2 = await page.evaluate(() => { const a = document.querySelector('#opts [data-sj]'); return a ? a.textContent : ''; }); await page.evaluate(() => REEL.go(1)); await page.waitForTimeout(300);
+    ok(/Blending the seam/.test(card) && /%/.test(card) && /Blending the seam/.test(card2), '🧵 a rendering card with its % shows under both clips while the seam blends (' + JSON.stringify([card, card2]) + ')');
     const sg = graphs().slice(n0); const tk = await eng.evaluate(() => { const t = H3.S.takes[0], src = H3.S.takes.find(x => x.id===t.combo.parts[0].take); return {seam:t.combo && t.combo.seam, parts:t.combo.parts.length, model:t.model, srcModel:src ? src.model : ''}; });
     ok(sg.length===1 && tk.seam && tk.seam.one && tk.parts===2 && (own ? tk.model===tk.srcModel && !tk.seam.unet : /prism/i.test(tk.seam.unet)),
       '🧵 one job: the two clips joined, the join repainted on ' + (own ? "the clips' own model" : 'PRISM PIKA') + ' (' + JSON.stringify(Object.assign({}, tk, {n:sg.length})) + ')');
     await finish(); await page.evaluate(() => REEL.pairTick()); await page.waitForTimeout(1500);
+    ok(await page.evaluate(() => { REEL.refresh(); return !document.querySelector('#opts [data-sj]'); }), '🧵 the card goes once the blended stretch is back as an option');
     const b1 = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length, seam:!!(c.meta[c.pick] || {}).seam, len:(c.out != null ? c.out : REEL.info(c.pick).secs) - (c.in || 0)})));
     ok(b1[0].pick===b0[0].pick && b1[1].seam && b1[2].seam && b1[1].pick===b1[2].pick && b1[1].pick!==b0[1].pick && b1[1].n===b0[1].n + 1 && Math.abs(b1[1].len - b0[1].len) < 0.05 && Math.abs(b1[2].len - b0[2].len) < 0.05,
       '🧵 clips 2 and 3 pick their own stretch of it, same lengths; clip 1 untouched (' + JSON.stringify({b0, b1}) + ')'); }
@@ -162,7 +166,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     ok(ch.redo && !ch.up && ch.model===pk && meta.upAfter && !meta.fin && !/prismpika/.test(m0), '🎨 the change runs on the picked model (Settings untouched) and is marked to be upscaled (' + JSON.stringify({ch, upAfter:meta.upAfter, m0}) + ')');
     await page.evaluate(id => { REEL.cur().pick = id; }, ch.id);
     await finish(); const nT3 = await eng.evaluate(() => H3.S.takes.length); await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(1500);
-    const au = await eng.evaluate(n => H3.S.takes.length > n ? {scale:H3.S.takes[0].up && H3.S.takes[0].up.scale, id:H3.S.takes[0].id, src:H3.S.takes[0].redo && H3.S.takes[0].redo.src} : null, nT3);
+    const au = await eng.evaluate(src => { const t = H3.S.takes.find(x => x.up && x.redo && x.redo.src===src); return t ? {scale:t.up.scale, id:t.id, src:t.redo.src} : null; }, ch.id);
     // (the fake PCs fail the ✨ pass itself, so the clip falls back off it: the pick is checked on the metadata and the pick made at send time)
     const pc = await page.evaluate(id => { const c = REEL.cur(); return {m:c.meta[id], src:c.meta[(c.meta[id] || {}).src] || {}}; }, au && au.id);
     ok(au && au.scale > 1 && au.src===ch.id && pc.m && pc.m.fin && pc.m.src===ch.id && pc.src.upAfter && pc.src.upAfter.sent===au.id, '⬆ once done, the change gets the ✨ upscale and that version is picked (' + JSON.stringify({au, pc}) + ')');
