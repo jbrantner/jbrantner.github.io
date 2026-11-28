@@ -114,6 +114,21 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const t3 = await eng.evaluate(() => H3.S.takes[0].model), m2 = await page.evaluate(() => REEL.E().look().model);
     ok(r && r.ids && t3===alt && m2===m0, '🎛 🪄 blend / ⇿ fill take a model too, Settings untouched (' + JSON.stringify({t3, alt, m2}) + ')');
     await finish(); }
+  // 🧵 Blend one seam (Jordan 2026-11-28): clip 2 and clip 3 joined, the join repainted, each gets its stretch back
+  await page.evaluate(() => REEL.go(1)); await page.waitForTimeout(400);
+  ok(await page.evaluate(() => /Blend the seam into clip 3/.test((document.querySelector('#pairOne') || {}).textContent || '')), '🧵 a Blend the seam button under the options of a clip with a clip after it');
+  for(const own of [0, 1]){
+    const b0 = await page.evaluate(() => REEL.clips().map(c => ({id:c.id, pick:c.pick, n:c.takes.length, len:(c.out != null ? c.out : REEL.info(c.pick).secs) - (c.in || 0)})));
+    await page.click('#pairOne'); await page.waitForTimeout(300);
+    if(own) await page.click('#prM [data-v="1"]');
+    n0 = graphs().length; await page.click('#prGo'); await page.waitForTimeout(2500);
+    const sg = graphs().slice(n0); const tk = await eng.evaluate(() => { const t = H3.S.takes[0], src = H3.S.takes.find(x => x.id===t.combo.parts[0].take); return {seam:t.combo && t.combo.seam, parts:t.combo.parts.length, model:t.model, srcModel:src ? src.model : ''}; });
+    ok(sg.length===1 && tk.seam && tk.seam.one && tk.parts===2 && (own ? tk.model===tk.srcModel && !tk.seam.unet : /prism/i.test(tk.seam.unet)),
+      '🧵 one job: the two clips joined, the join repainted on ' + (own ? "the clips' own model" : 'PRISM PIKA') + ' (' + JSON.stringify(Object.assign({}, tk, {n:sg.length})) + ')');
+    await finish(); await page.evaluate(() => REEL.pairTick()); await page.waitForTimeout(1500);
+    const b1 = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length, seam:!!(c.meta[c.pick] || {}).seam, len:(c.out != null ? c.out : REEL.info(c.pick).secs) - (c.in || 0)})));
+    ok(b1[0].pick===b0[0].pick && b1[1].seam && b1[2].seam && b1[1].pick===b1[2].pick && b1[1].pick!==b0[1].pick && b1[1].n===b0[1].n + 1 && Math.abs(b1[1].len - b0[1].len) < 0.05 && Math.abs(b1[2].len - b0[2].len) < 0.05,
+      '🧵 clips 2 and 3 pick their own stretch of it, same lengths; clip 1 untouched (' + JSON.stringify({b0, b1}) + ')'); }
   // ➕ Next gets the keep line after the [0s-1s] anchor (never inside it)
   { const r = await page.evaluate(async () => { const cs = REEL.clips(), x = await REEL.E().carry({take:cs[2].pick, at:REEL.info(cs[2].pick).secs, words:'Mia sits down', who:['Lmia'], n:1}); return x; });
     const p = await eng.evaluate(() => H3.S.takes[0].prompt);
