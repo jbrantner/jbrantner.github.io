@@ -107,6 +107,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.click('#upN [data-v="1"]'); const k0 = await page.evaluate(() => REEL.clips()[1].takes.length), pk = await page.evaluate(() => REEL.clips()[1].pick);
   await page.click('#upGo'); await page.waitForTimeout(2500); t = await T();
   const u3 = t.filter(x => x.scale > 1 && x.src===pk); ok(u3.length===2 && u3.some(x => x.vid===f1.fin), "⬆ the single upscale carries on from clip 1's picked (face-fixed) option");
+  // 🍲 the clip before's last frame goes in as one more reference picture for the whole clip, named in the words
+  const kg = async id => eng.evaluate(id => { const t = H3.S.takes.find(x => x.id===id), g = Object.values(H3.upGraph(t, H3.PC[t.pc].oi, {}).g), C = c => g.filter(n => n.class_type===c), r = C('MiniMaxH3ReferenceToVideo')[0] || {inputs:{}};
+    const keys = Object.keys(r.inputs).filter(k => /^ref_images\.ref_image_/.test(k)), m = (r.inputs.prompt || '').match(/<Ref Image (\d+)> is the moment just before/);
+    return {keep:!!t.up.keep, rev:C('ReverseImageBatch').length, refs:keys.length, n:m ? +m[1] : 0, mc:C('MiniMaxH3MotionContext').length}; }, id);
+  const k3 = await kg(u3.find(x => x.vid===f1.fin).id);
+  ok(k3.keep && k3.rev >= 1 && k3.n===k3.refs && k3.mc===1, "⬆ the single upscale also gets clip 1's last frame as its last reference picture, named in the words (" + JSON.stringify(k3) + ')');
   await finish(); await tick(); t = await T();
   const nu = u3.find(x => x.state==='done' && !t.some(y => y.faces && y.src===x.id && false)), f3 = t.filter(x => x.faces);
   ok(f3.length===3, 'then its face pass is sent (' + f3.length + ')');
@@ -131,7 +137,7 @@ ok(await page.evaluate(() => { const c = window.FAPI_CALLS; return c.includes('C
   const why = await page.evaluate(() => { const c = REEL.clips()[0]; c.who = ['Lmia', 'Lpip']; delete c.fscan; return REEL.ufxFaces(c); });
   ok(why.ppl && why.ppl.length===2 && !why.fb, 'with two people it still goes ahead and works out who is who (' + JSON.stringify(why) + ')');
   // 🎬 After the whole upscale: the usual Final pass, then every clip's face pass at once, then seams
-  await page.evaluate(() => { const c = REEL.clips()[0]; c.who = ['Lmia']; REEL.R().seam = null; REEL.go(0); }); await page.waitForTimeout(300);
+  await page.evaluate(() => { const c = REEL.clips()[0]; c.who = ['Lmia']; REEL.clips().forEach(x => { x.pick = x.takes[0]; x.in = 0; x.out = null; }); REEL.R().seam = null; REEL.refresh(); REEL.go(0); }); // (both from their originals, the same size, so the ✨ passes chain on the PC) await page.waitForTimeout(300);
   await page.click('#finBtn'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => document.querySelector('#fnFx').checked && !!document.querySelector('#fnFxW [data-w="after"]')), '🎬 the sheet offers Clip by clip / After the whole upscale');
   await page.click('#fnFxW [data-w="after"]'); await page.waitForTimeout(100);
@@ -140,7 +146,10 @@ ok(await page.evaluate(() => { const c = window.FAPI_CALLS; return c.includes('C
   await page.click('#fnGo'); await page.waitForTimeout(2500); t = await T();
   const ups2 = t.filter(x => x.scale > 1).length - up0;
   ok(ups2===2 && t.filter(x => x.faces).length===fx0 && await page.evaluate(() => REEL.R().ufx.kind==='after' && !REEL.R().seam), 'both clips are upscaled at once (chained as usual), no face pass or seams yet (' + ups2 + ')');
-  await finish(); await tick(); await tick(); t = await T();
+  await finish();
+  { const id2 = await eng.evaluate(() => (H3.S.takes.find(t => t.up && t.up.scale > 1 && t.up.chain && t.up.chain.prev && !t.up.chain.vid) || {}).id), k2 = await kg(id2);
+    ok(!!id2 && k2.keep && k2.n===k2.refs && k2.rev >= 1, "🎬 in the Final pass, clip 2's ✨ (carrying on from clip 1's ✨ on the PC) gets clip 1's ✨ last frame too (" + JSON.stringify(k2) + ')'); }
+  await tick(); await tick(); t = await T();
   ok(t.filter(x => x.faces).length===fx0 + 2, 'once they are done, both clips get their face pass at the same time (' + (t.filter(x => x.faces).length - fx0) + ')');
   await finish(); await tick();
   const e2 = await page.evaluate(() => ({st:REEL.R().ufx.items.map(x => x.st), picks:REEL.clips().map(c => !!(c.meta[c.pick] || {}).faces), seam:REEL.R().seam && REEL.R().seam.state}));
