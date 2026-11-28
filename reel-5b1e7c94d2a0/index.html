@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-28-4">
+<meta name="reel-build" content="2026-11-28-5">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -470,7 +470,10 @@ function seamJumps(cs, i){ const c = cs[i], P = cs[i - 1]; if(!c || !P || !c.pic
   const m = (c.meta || {})[c.pick] || {}, pm = (P.meta || {})[P.pick] || {};
   const a = m.after && rootOf(P, m.after)!==rootOf(P, P.pick) && !(pm.before && rootOf(c, pm.before)===rootOf(c, c.pick));
   const b = pm.before && rootOf(c, pm.before)!==rootOf(c, c.pick) && !(m.after && rootOf(P, m.after)===rootOf(P, P.pick));
-  return !!(a || b); }
+  // ⬆ an upscale carries on from the exact option the clip before had picked then (Jordan 2026-11-28: clip 3 was upscaled, then the food
+  // popped against clip 2's upscale): another option picked there since (its upscale, or the original back) = it may jump
+  const u = m.upCtx && m.upCtx!==P.pick && P.takes.includes(m.upCtx);
+  return !!(a || b || u); }
 function drawWheel(){ const box = $('#wheel'), cs = clips();
   if(box.children.length!==cs.length || box.dataset.r!==S.open){ box.dataset.r = S.open; box.innerHTML = cs.map((c, i) => `<div class="wi" data-i="${i}"></div>`).join(''); }
   cs.forEach((c, i) => { const el = box.children[i], I = c.pick ? info(c.pick) : {state:'none'};
@@ -1199,10 +1202,20 @@ document.addEventListener('click', e => { if(e.target.closest('[data-p2]')) phas
 // choose (since some of them change quite a bit)"): the same ✨ pass as 🎬 Final pass on the picked option alone, N times with different seeds.
 // An upscaled option is upscaled again from its original. Each one shows up as an option of the clip (⬆); the pick doesn't change.
 const UP_N = [1, 2, 3, 4];
+// what a ⬆ upscale of this clip carries on from, said plainly (Jordan 2026-11-28: "I've upscaled the segment expecting it to have taken context
+// from the previous segment but the food pops into something different"): the motion context only holds the first moments; after that the
+// pass follows this clip's own frames, so anything the clip before's upscale redrew (the food) can change back to how this clip had it
+function upCtxNote(c){ const cs = clips(), i = cs.indexOf(c), P = cs[i - 1]; if(i < 1 || !P) return '';
+  const warn = t => `<div class="note" style="margin-top:6px;color:var(--bad)">${t}</div>`, tip = t => `<div class="note" style="margin-top:6px">${t}</div>`;
+  if(isCut(c)) return warn('🎬 Clip ' + (i + 1) + ' starts a new shot, so it doesn\'t carry on from clip ' + i + '. Anything the upscale redraws (food, props) can come out different from clip ' + i + '.');
+  if(!P.pick || !doneOf(P.pick)) return warn('Clip ' + i + ' has no finished option picked, so this won\'t carry on from it.');
+  const up = isUp(P, P.pick);
+  return (up ? tip('🔗 Carries on from clip ' + i + "'s ⬆ upscaled option (its last frames, motion and colour).") : warn('🔗 Clip ' + i + " isn't upscaled yet, so this carries on from its original. If you upscale clip " + i + ' afterwards, the join can jump: upscale clip ' + i + ' first, then this one.'))
+    + tip('The carry-on holds the first moment; after that the pass follows this clip\'s own frames. If clip ' + i + "'s upscale changed something (food, props), it can change back here: ✨ Light or Medium keeps closer to the frames and changes less on both sides."); }
 function upSheet(){ const c = cur(); if(!c || !c.pick || !doneOf(c.pick)) return; const m = (c.meta || {})[c.pick] || {}, id = m.fin && m.src && c.takes.includes(m.src) ? m.src : c.pick,
     o = {den:S.finDen || 0.9, n:S.upN || 2}, UL = upLook();
   sheet(`<h3><span>⬆ Upscale this option</span><button class="btn" data-close>✕</button></h3>
-    <div class="note">✨ High quality with <span class="hmN">${upHmName()}</span> on ${id===c.pick ? 'this option' : 'the original this option was upscaled from'}, the same pass as 🎬 Final pass. Each one comes out a little different, so make a few and pick. They show up as new ⬆ options of this clip.${cur() && clips().indexOf(cur()) > 0 && !isCut(cur()) ? ' Each carries on from the clip before (its motion and colour), like the 🎬 Final pass.' : ''}</div>
+    <div class="note">✨ High quality with <span class="hmN">${upHmName()}</span> on ${id===c.pick ? 'this option' : 'the original this option was upscaled from'}, the same pass as 🎬 Final pass. Each one comes out a little different, so make a few and pick. They show up as new ⬆ options of this clip.</div>${upCtxNote(c)}
     <div class="lab" style="margin-top:10px"><span>✨ How strong</span></div><div class="seg" id="upLv">${FIN_LV.map(([v, l]) => `<button data-v="${v}" class="${v===o.den ? 'on' : ''}">${l}</button>`).join('')}</div>${hmHtml('upHm')}
     <div class="lsl" data-up="1">${slHtml(UL, false, '', UP_SUB)}</div>
     ${ufxHtml('up', [c])}<div class="lab" style="margin-top:10px"><span>How many</span></div><div class="seg" id="upN">${UP_N.map(v => `<button data-v="${v}" class="${v===o.n ? 'on' : ''}">${v}</button>`).join('')}</div>
@@ -1219,7 +1232,7 @@ function upSheet(){ const c = cur(); if(!c || !c.pick || !doneOf(c.pick)) return
       for(let k = 0; k < o.n; k++){ const x = await E.final({clips:[{take:id, a, b:secs, ctx}], den:o.den, lstr:0, sl:cl(slOn(UL)), hm:upHm()}).catch(e => ({err:e.message})); if(x && x.ids && x.ids[0]) got.push(x.ids[0]); else err = (x && x.err) || 'Not sent'; }
       return got.length ? {ids:got} : {err}; }, '⬆ Sent: ' + o.n + ' upscale' + (o.n===1 ? '' : 's') + ' of this option, each a new option to pick from');
     if(!ids) return; const T = {in:tr.in - a, out:tr.out != null ? tr.out - a : null};
-    addTakes(c, ids, Object.assign({}, L, {fin:true, src:id, reup:0, whole:!a, srcIn:tr.in, srcOut:tr.out, trim:T}), wordsOf(c, id));
+    addTakes(c, ids, Object.assign({}, L, {fin:true, src:id, reup:0, whole:!a, srcIn:tr.in, srcOut:tr.out, trim:T, upCtx:ctx ? ctx.take : null}), wordsOf(c, id));
     if(S.upFx){ const fs = ufxFaces(c); if(fs.ppl) ufxOne(c, ids); else toast('🎭 ' + fs.why + ', so only the upscale was sent', 6000); }
     save(); VSIG = ''; refresh(); }; }
 // 🎭 Fix faces inside the upscale (Jordan 2026-11-28: "for the upscale pass, both for a single segment and for a full pass, can we have a toggle
