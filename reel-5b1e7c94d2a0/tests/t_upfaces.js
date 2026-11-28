@@ -103,6 +103,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.evaluate(() => { const c = REEL.clips()[1]; c.pick = c.takes[0]; REEL.refresh(); REEL.go(1); }); await page.waitForTimeout(500);
   await page.click('#upOne'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => document.querySelector('#upFx').checked && /more options/.test(document.querySelector('#upFxN').textContent)), '⬆ Upscale this option has the switch too (remembered on)');
+  ok(await page.evaluate(() => /Carries on from clip 1's ⬆ upscaled option/.test(document.querySelector('#sheet').textContent)), "⬆ the sheet says it carries on from clip 1's upscaled option");
   await page.click('#upN [data-v="1"]'); const k0 = await page.evaluate(() => REEL.clips()[1].takes.length), pk = await page.evaluate(() => REEL.clips()[1].pick);
   await page.click('#upGo'); await page.waitForTimeout(2500); t = await T();
   const u3 = t.filter(x => x.scale > 1 && x.src===pk); ok(u3.length===2 && u3.some(x => x.vid===f1.fin), "⬆ the single upscale carries on from clip 1's picked (face-fixed) option");
@@ -113,6 +114,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const s3 = await page.evaluate(([k0, pk]) => { const c = REEL.clips()[1]; return {n:c.takes.length - k0, pick:c.pick===pk, fx:c.takes.slice(k0).map(id => !!c.meta[id].faces)}; }, [k0, pk]);
   ok(s3.n===2 && s3.pick && s3.fx.join()==='false,true', 'the upscale and its face-fixed version are both new options; the pick stays (' + JSON.stringify(s3) + ')');
 ok(await page.evaluate(() => { const c = window.FAPI_CALLS; return c.includes('CANVAS') && c.includes('IMG'); }), '🙂 face prints come from the cut-out faces and from her Library pictures');
+  // ⬆ it remembers which option of clip 1 it carried on from: picking another one there shows ⚠ on clip 2
+  const cx = await page.evaluate(([k0, f1]) => { const c = REEL.clips()[1], id = c.takes[k0], P = REEL.clips()[0], m = c.meta[id].upCtx; c.pick = id; P.pick = m; REEL.refresh();
+    const before = !!document.querySelector('#wheel [data-i="1"] .jmp'), other = P.takes.find(x => x!==m && REEL.info(x).state==='done'); P.pick = other; REEL.refresh(); return {m, f1, before, after:!!document.querySelector('#wheel [data-i="1"] .jmp')}; }, [k0, f1.id]);
+  await page.waitForTimeout(300);
+  ok(cx.m===cx.f1 && !cx.before && cx.after, '⬆ the upscale remembers the option of clip 1 it carried on from, and ⚠ shows when clip 1 picks another (' + JSON.stringify(cx) + ')');
+  await page.evaluate(() => { const c = REEL.clips()[1]; c.pick = c.takes[0]; REEL.R().clips[0].pick = REEL.R().clips[0].takes[0]; REEL.refresh(); REEL.go(1); }); await page.waitForTimeout(400);
+  await page.click('#upOne'); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => /isn't upscaled yet/.test(document.querySelector('#sheet').textContent)), "⬆ with clip 1 back on its original, the sheet warns to upscale clip 1 first");
+  await page.click('[data-close]'); await page.evaluate(() => { const P = REEL.R().clips[0]; P.pick = P.takes.find(id => (P.meta[id] || {}).faces) || P.pick; REEL.refresh(); }); await page.waitForTimeout(200);
   // 🙂 matching: the closest pairs, one face each, only when close enough
   const as = await page.evaluate(() => { const A = new Array(128).fill(0.1), B = new Array(128).fill(0.3), near = v => v.map(x => x + 0.01);
     return {two:REEL.faceAssign([A, B, null], [{lib:'Lmia', p:near(B)}, {lib:'Lpip', p:near(A)}]), far:REEL.faceAssign([A], [{lib:'Lmia', p:new Array(128).fill(0.9)}]), one:REEL.faceAssign([A, near(A)], [{lib:'Lmia', p:A}])}; });
