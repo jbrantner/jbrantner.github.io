@@ -9,12 +9,13 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
 const SCHEMA = {
   UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'singularityV2X10eros_prismPIKA.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'glow.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  MinimaxH3LatentUpscaler3D:{input:{required:{model_name:[['minimax_h3_latent_upscaler_3d_bf16.safetensors']]}}},
   MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
   ImageBatch:{input:{required:{image1:['IMAGE'], image2:['IMAGE']}}},
 };
-const OTHER = ['ColorMatch','ConditioningSetTimestepRange','ConditioningCombine','MiniMaxH3ReferenceToVideo','NAGGuiderMiniMaxH3','CLIPTextEncode','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
+const OTHER = ['RepeatImageBatch','ColorMatch','ConditioningSetTimestepRange','ConditioningCombine','MiniMaxH3ReferenceToVideo','NAGGuiderMiniMaxH3','CLIPTextEncode','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
   'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
   'BboxDetectorSEGS','UltralyticsDetectorProvider','SplitSigmas','DisableNoise','SegsToCombinedMask','MaskToImage','PreviewImage','Video Slice','ImageFromBatch','TrimAudioDuration','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent','ManualSigmas'];
 const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
@@ -162,8 +163,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await page.evaluate(id => { REEL.cur().pick = id; }, ch.id);
     await finish(); const nT3 = await eng.evaluate(() => H3.S.takes.length); await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(1500);
     const au = await eng.evaluate(n => H3.S.takes.length > n ? {scale:H3.S.takes[0].up && H3.S.takes[0].up.scale, id:H3.S.takes[0].id, src:H3.S.takes[0].redo && H3.S.takes[0].redo.src} : null, nT3);
-    const pc = await page.evaluate(() => { const c = REEL.cur(); return {pick:c.pick, m:c.meta[c.pick]}; });
-    ok(au && au.scale > 1 && au.src===ch.id && pc.pick===au.id && pc.m.fin && pc.m.src===ch.id, '⬆ once done, the change gets the ✨ upscale and that version is picked (' + JSON.stringify({au, pc}) + ')');
+    // (the fake PCs fail the ✨ pass itself, so the clip falls back off it: the pick is checked on the metadata and the pick made at send time)
+    const pc = await page.evaluate(id => { const c = REEL.cur(); return {m:c.meta[id], src:c.meta[(c.meta[id] || {}).src] || {}}; }, au && au.id);
+    ok(au && au.scale > 1 && au.src===ch.id && pc.m && pc.m.fin && pc.m.src===ch.id && pc.src.upAfter && pc.src.upAfter.sent===au.id, '⬆ once done, the change gets the ✨ upscale and that version is picked (' + JSON.stringify({au, pc}) + ')');
+    { const r = await page.evaluate(async () => { const c = REEL.cur(), id = c.takes[0], p0 = c.pick; (c.meta[id] = c.meta[id] || {}).upAfter = {den:0.9, hm:'pika', sl:[]}; c.pick = id;
+        const E = REEL.E(), f0 = E.final, other = REEL.clips()[0].pick; E.final = async () => ({ids:[other]}); try{ await REEL.upAfterTick(); }finally{ E.final = f0; } const res = {picked:c.pick===other, id, meta:c.meta[other] && c.meta[other].src===id};
+        c.takes = c.takes.filter(x => x!==other); delete c.meta[other]; delete c.meta[id].upAfter; c.pick = p0; REEL.refresh(); return res; });
+      ok(r && r.picked && r.meta, '⬆ when the change is the picked option, its upscale is picked (' + JSON.stringify(r) + ')'); }
     await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(800);
     ok(await eng.evaluate(n => H3.S.takes.filter(t => t.redo && t.redo.src===n).length, ch.id)===1, '⬆ only one upscale per change');
     for(let k = 0; k < 3; k++){ await finish(); await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(800); } await finish();
