@@ -120,7 +120,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   for(const own of [0, 1]){
     const b0 = await page.evaluate(() => REEL.clips().map(c => ({id:c.id, pick:c.pick, n:c.takes.length, len:(c.out != null ? c.out : REEL.info(c.pick).secs) - (c.in || 0)})));
     await page.click('#pairOne'); await page.waitForTimeout(300);
-    if(own) await page.click('#prM [data-v="1"]');
+    if(own) await page.selectOption('#prM', 'own');
     n0 = graphs().length; await page.click('#prGo'); await page.waitForTimeout(2500);
     const sg = graphs().slice(n0); const tk = await eng.evaluate(() => { const t = H3.S.takes[0], src = H3.S.takes.find(x => x.id===t.combo.parts[0].take); return {seam:t.combo && t.combo.seam, parts:t.combo.parts.length, model:t.model, srcModel:src ? src.model : ''}; });
     ok(sg.length===1 && tk.seam && tk.seam.one && tk.parts===2 && (own ? tk.model===tk.srcModel && !tk.seam.unet : /prism/i.test(tk.seam.unet)),
@@ -129,6 +129,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const b1 = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length, seam:!!(c.meta[c.pick] || {}).seam, len:(c.out != null ? c.out : REEL.info(c.pick).secs) - (c.in || 0)})));
     ok(b1[0].pick===b0[0].pick && b1[1].seam && b1[2].seam && b1[1].pick===b1[2].pick && b1[1].pick!==b0[1].pick && b1[1].n===b0[1].n + 1 && Math.abs(b1[1].len - b0[1].len) < 0.05 && Math.abs(b1[2].len - b0[2].len) < 0.05,
       '🧵 clips 2 and 3 pick their own stretch of it, same lengths; clip 1 untouched (' + JSON.stringify({b0, b1}) + ')'); }
+  // 🧵 any ⚙ model pick in the seam sheet, finish included (Jordan 2026-11-28: "I want access to all of them")
+  { const op = await page.evaluate(() => { document.querySelector('#pairOne').click(); return [...document.querySelectorAll('#prM option')].map(o => o.value); }); await page.waitForTimeout(300);
+    const ref = op.find(v => /ref2va/.test(v) && !/#/.test(v));
+    ok(op.length >= 4 && ref && op.includes('own') && op.some(v => /#v$/.test(v)), '🧵 the seam Model list has every ⚙ pick plus the clips\' own (' + JSON.stringify(op) + ')');
+    await page.selectOption('#prM', ref); n0 = graphs().length; await page.click('#prGo'); await page.waitForTimeout(2500);
+    const tk = await eng.evaluate(() => { const t = H3.S.takes[0]; return {model:t.model, fin:t.fin, seam:!!(t.combo && t.combo.seam)}; }), G = graphs().slice(n0)[0];
+    const un = G ? Object.values(G.g).filter(n => n.class_type==='UNETLoader').map(n => n.inputs.unet_name) : [];
+    ok(tk.seam && /ref2va/.test(tk.model) && tk.fin && un.some(u => /ref2va/.test(u)) && un.some(u => /prismPIKA/.test(u)), '🧵 H3 Reference → PIKA finish repaints the seam on both models (' + JSON.stringify({tk, un}) + ')');
+    await finish(); await page.evaluate(() => REEL.pairTick()); await page.waitForTimeout(1000); }
   // ➕ Next gets the keep line after the [0s-1s] anchor (never inside it)
   { const r = await page.evaluate(async () => { const cs = REEL.clips(), x = await REEL.E().carry({take:cs[2].pick, at:REEL.info(cs[2].pick).secs, words:'Mia sits down', who:['Lmia'], n:1}); return x; });
     const p = await eng.evaluate(() => H3.S.takes[0].prompt);
