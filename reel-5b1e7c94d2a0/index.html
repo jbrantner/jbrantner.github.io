@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-28-1">
+<meta name="reel-build" content="2026-11-28-2">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -1173,10 +1173,12 @@ function finalSheet(){ const cs = clips(), ok = cs.filter(c => doneOf(c.pick)), 
   $('#lpRep').onchange = e => { S.allRep = e.target.checked; save(); };
   $('#lpGo').onclick = () => loopReel($('#lpGo'));
   $('#fnGo').onclick = async () => { S.finDen = o.den; upKeep(UL); save(); let all = [];
-    if(S.upFx){ if(ufxBusy(R())){ toast('🎭 A face pass upscale is still going on this reel'); return; } return ufxAll(ok, o.den, UL); } // (🎭 faces too: clip by clip, each carrying on from the fixed one before)
+    const fxA = S.upFx && ufxWay()==='after'; if(S.upFx && ufxBusy(R())){ toast('🎭 A face pass upscale is still going on this reel'); return; }
+    if(S.upFx && !fxA) return ufxAll(ok, o.den, UL); // (🎭 faces too: clip by clip, each carrying on from the fixed one before)
     const r = await send($('#fnGo'), async () => { const x = await E.final({clips:ok.map(c => ({take:c.pick, a:c.in || 0, b:endOf(c), cut:isCut(c)})), den:o.den, lstr:0, sl:cl(slOn(UL)), hm:upHm()}); if(x.ids){ all = x.ids; return {ids:x.ids.filter(Boolean)}; } return x; }, '🎬 Final pass sent: each clip gets its ✨ version as a new option');
     if(!r) return; ok.forEach((c, k) => { const id = all[k]; if(!id) return; addTakes(c, [id], Object.assign({}, (c.meta || {})[c.pick] || {}, {fin:true, src:c.pick, reup:0, whole:false, srcIn:c.in || 0, srcOut:c.out != null ? c.out : null}), wordsOf(c, c.pick)); c.pick = id; c.in = 0; c.out = null; c.up = true; }); // (↩ Back puts the trim she had back)
-    if(S.finSeam!==false) seamStart(true); save(); VSIG = ''; refresh(); }; }
+    if(fxA){ ufxAfter(ok.map((c, k) => [c, all[k]]).filter(([c, id]) => id && c.pick===id), S.finSeam!==false); toast('🎭 Then each clip gets its face pass over the hi-res video' + (S.finSeam!==false ? ', then the seams are blended' : '') + '. Keep Reel open until it\'s done.', 7000); }
+    else if(S.finSeam!==false) seamStart(true); save(); VSIG = ''; refresh(); }; }
 $('#finBtn').onclick = e => { e.stopPropagation(); finalSheet(); };
 // 🔑 Phase 2 is HIDDEN for now (Jordan 2026-11-25: "confusing me and messing with the workflow. Might just need a rethink later").
 // The page (keys/) and its code stay; ?p2=1 on Reel's address shows the buttons again (the tests use it).
@@ -1212,61 +1214,116 @@ function upSheet(){ const c = cur(); if(!c || !c.pick || !doneOf(c.pick)) return
       return got.length ? {ids:got} : {err}; }, '⬆ Sent: ' + o.n + ' upscale' + (o.n===1 ? '' : 's') + ' of this option, each a new option to pick from');
     if(!ids) return; const T = {in:tr.in - a, out:tr.out != null ? tr.out - a : null};
     addTakes(c, ids, Object.assign({}, L, {fin:true, src:id, reup:0, whole:!a, srcIn:tr.in, srcOut:tr.out, trim:T}), wordsOf(c, id));
-    if(S.upFx){ const fs = ufxFaces(c); if(fs.faces) ufxOne(c, ids, fs.faces); else toast('🎭 ' + fs.why + ', so only the upscale was sent', 6000); }
+    if(S.upFx){ const fs = ufxFaces(c); if(fs.ppl) ufxOne(c, ids); else toast('🎭 ' + fs.why + ', so only the upscale was sent', 6000); }
     save(); VSIG = ''; refresh(); }; }
 // 🎭 Fix faces inside the upscale (Jordan 2026-11-28: "for the upscale pass, both for a single segment and for a full pass, can we have a toggle
 // face pass as well? … if I do the face pass after the upscale it might not link up with the following segments"): with 🎭 on, each clip's ✨
-// result gets ✂ Edit's 🎭 Fix faces right away, and in the 🎬 Final pass the NEXT clip's ✨ pass only starts once that is done and carries on
-// from the face-fixed video (H3 Motion Context from its frames + colour match), so every join lines up with the faces as they end up. Then
-// 🧵 seams (if on). It runs clip by clip from the phone: R().ufx = {kind:'all'|'one', den, hm, sl, fx, seam, items:[{cid, take, a, b, cut,
-// faces, meta, words, up, fx, st:'wait'|'up'|'fx'|'done', res, tries}]}. Whose face is whose: one person in the clip = number 0, more = the
-// numbers picked in ✂ Edit › 🎭 Fix faces (after 🔎); a clip with nobody to fix just gets the upscale.
+// result gets ✂ Edit's 🎭 Fix faces. Two ways for the 🎬 Final pass (S.upFxWay):
+// - 'chain' clip by clip: the NEXT clip's ✨ pass only starts once the face pass before is done and carries on from the face-fixed video
+//   (H3 Motion Context from its frames + colour match), so every join lines up with the faces as they end up. Then 🧵 seams (if on).
+// - 'after' (Jordan 2026-11-28: "do a face pass after the upscale as an option. That way it can scan the whole video and pick out the
+//   character faces individually and assign them character refs THEN it can go through and do the face pass over the high res fix pass"):
+//   the usual Final pass (chained on one PC, faster), then every clip's face pass at once, then 🧵 seams (if on) smooth the joins.
+// Whose face is whose is worked out by itself (faceWho): SAM 3 numbers the faces over the whole hi-res clip, and each numbered face is
+// matched to the clip's characters by their 📚 Library pictures (face recognition on the phone). If that can't tell: one person = number 0,
+// else the numbers picked in ✂ Edit › 🎭 Fix faces, else that clip keeps just the upscale.
+// R().ufx = {kind:'all'|'after'|'one', den, hm, sl, fx, seam, items:[{cid, take, a, b, cut, ppl, fb, meta, words, up, q, fx, st:'wait'|'up'|'id'|'fx'|'done', res, tries, par, pick}]}
 function ufxFaces(c){ const lib = E ? E.lib() : [], ch = id => { const L = lib.find(x => x.id===id); return L && (L.kind || 'char')==='char' && (L.pics || []).length ? L : null; };
   let ppl = onScreen(c).map(ch).filter(Boolean); if(!ppl.length && castOf().length===1) ppl = [ch(castOf()[0])].filter(Boolean);
   if(!ppl.length) return {why:'Nobody from the 📚 Library with pictures is in clip ' + (clips().indexOf(c) + 1)};
-  if(ppl.length===1) return {faces:[{lib:ppl[0].id, obj:0}]};
   const P = c.fscan && c.fscan.url ? Object.entries(c.fpick || {}).filter(([id, k]) => k >= 0 && ppl.some(p => p.id===id)) : [];
-  return P.length ? {faces:P.map(([lib, obj]) => ({lib, obj}))} : {why:'Clip ' + (clips().indexOf(c) + 1) + ' has ' + ppl.length + " people: pick whose face is whose in ✂ Edit › 🎭 Fix faces first"}; }
+  return {ppl:ppl.map(p => p.id), fb:ppl.length===1 ? [{lib:ppl[0].id, obj:0}] : P.length ? P.map(([lib, obj]) => ({lib, obj})) : null}; }
+// 🙂 face recognition on the phone (face-api, loaded the first time it's needed): a 128-number "face print" per face; the same person's
+// prints are close together. Each numbered face (a few frames of it) and each character (her Library pictures) gets an average print,
+// then the closest pairs are matched, one face per character, and only when they're close enough
+const FAPI_U = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15'; let FAPI = null;
+function fapi(){ if(window.REEL_FAPI) return Promise.resolve(window.REEL_FAPI);
+  return FAPI = FAPI || (async () => { const m = await import(FAPI_U + '/dist/face-api.esm.js'), u = FAPI_U + '/model/';
+    await Promise.all([m.nets.tinyFaceDetector.loadFromUri(u), m.nets.faceLandmark68Net.loadFromUri(u), m.nets.faceRecognitionNet.loadFromUri(u)]); return m; })().catch(e => { FAPI = null; throw e; }); }
+const imgOf = u => new Promise((ok, no) => { const im = new Image(); if(!/^(data|blob):/.test(u)) im.crossOrigin = 'anonymous'; im.onload = () => ok(im); im.onerror = () => no(new Error('no picture')); im.src = u; });
+async function printOf(m, src){ try{ const d = await m.detectSingleFace(src, new m.TinyFaceDetectorOptions({inputSize:320, scoreThreshold:0.3})).withFaceLandmarks().withFaceDescriptor(); return d && d.descriptor ? Array.from(d.descriptor) : null; }catch(e){ return null; } }
+const avgPrint = P => { P = P.filter(Boolean); if(!P.length) return null; return P[0].map((_, i) => P.reduce((a, p) => a + p[i], 0) / P.length); };
+const printDist = (a, b) => Math.sqrt(a.reduce((s, x, i) => s + (x - b[i]) ** 2, 0));
+const FACE_MATCH = 0.62; // (face-api's usual "same person" line is 0.6; a little looser for a redrawn, hi-res frame)
+function faceAssign(objs, chars){ const pairs = []; objs.forEach((o, j) => o && chars.forEach(c => c.p && pairs.push({j, lib:c.lib, d:printDist(o, c.p)}))); pairs.sort((x, y) => x.d - y.d);
+  const out = [], uj = new Set(), ul = new Set(); for(const q of pairs){ if(q.d > FACE_MATCH || uj.has(q.j) || ul.has(q.lib)) continue; uj.add(q.j); ul.add(q.lib); out.push({lib:q.lib, obj:q.j}); } return out; }
+// the square around a mask's white part, from a mask picture (0-1 of the picture), or null
+function maskBox(im){ const W = 160, H = Math.max(1, Math.round(W * im.naturalHeight / im.naturalWidth)), c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d'); g.drawImage(im, 0, 0, W, H);
+  const d = g.getImageData(0, 0, W, H).data; let x0 = W, y0 = H, x1 = -1, y1 = -1, n = 0;
+  for(let y = 0; y < H; y++) for(let x = 0; x < W; x++) if(d[(y * W + x) * 4] > 127){ n++; if(x < x0) x0 = x; if(x > x1) x1 = x; if(y < y0) y0 = y; if(y > y1) y1 = y; }
+  return n < 6 ? null : {x:x0 / W, y:y0 / H, w:(x1 - x0 + 1) / W, h:(y1 - y0 + 1) / H}; }
+function cropFace(im, b){ const W = im.naturalWidth, H = im.naturalHeight, side = Math.min(W, H, Math.max(b.w * W, b.h * H) * 1.8), cx = (b.x + b.w / 2) * W, cy = (b.y + b.h / 2) * H;
+  const c = document.createElement('canvas'); c.width = c.height = 256; c.getContext('2d').drawImage(im, Math.max(0, Math.min(W - side, cx - side / 2)), Math.max(0, Math.min(H - side, cy - side / 2)), side, side, 0, 0, 256, 256); return c; }
+async function faceWho(res, ppl){ const m = await fapi(), lib = E ? E.lib() : [], fr = await Promise.all((res.frames || []).map(u => u ? imgOf(u).catch(() => null) : null));
+  const objs = []; for(const row of res.objs || []){ const P = [];
+    for(let k = 0; k < row.length; k++){ if(!fr[k] || !row[k]) continue; const mk = await imgOf(row[k]).catch(() => null), b = mk && maskBox(mk); if(b) P.push(await printOf(m, cropFace(fr[k], b))); }
+    objs.push(avgPrint(P)); }
+  const chars = []; for(const id of ppl){ const L = lib.find(x => x.id===id); if(!L) continue; const P = [];
+    for(const pid of (L.pics || []).slice(0, 4)){ let im = null; // (her picture, else its face crop, else the small preview H3 Deck kept)
+      for(const u of [await E.picUrl(pid).catch(() => ''), FACE[pid], pid===L.pic ? L.thumb : '']){ if(!u || u==='none') continue; im = await imgOf(u).catch(() => null); if(im) break; } if(im) P.push(await printOf(m, im)); }
+    chars.push({lib:id, p:avgPrint(P)}); }
+  return {faces:faceAssign(objs, chars), found:objs.filter(Boolean).length, known:chars.filter(c => c.p).length}; }
 const ufxBusy = r => !!(r && r.ufx && r.ufx.items.some(x => x.st!=='done'));
-function ufxHtml(k, cs){ const den = FX_LV.some(([v]) => v===S.fxDen) ? S.fxDen : FX_LV[0][0];
+const ufxWay = () => S.upFxWay==='after' ? 'after' : 'chain';
+function ufxHtml(k, cs){ const den = ufxDen();
   return `<label class="lab" style="margin-top:12px;display:flex;gap:8px;align-items:center"><input type="checkbox" id="${k}Fx" ${S.upFx ? 'checked' : ''}><span>🎭 Fix faces too</span></label>
-    <div id="${k}FxB" ${S.upFx ? '' : 'hidden'}><div class="seg" id="${k}FxS">${FX_LV.map(([v, l]) => `<button data-v="${v}" class="${v===den ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <div id="${k}FxB" ${S.upFx ? '' : 'hidden'}>${k==='fn' ? `<div class="seg" id="${k}FxW"><button data-w="chain" class="${ufxWay()==='chain' ? 'on' : ''}">Clip by clip</button><button data-w="after" class="${ufxWay()==='after' ? 'on' : ''}">After the whole upscale</button></div>` : ''}
+    <div class="seg" id="${k}FxS" style="margin-top:6px">${FX_LV.map(([v, l]) => `<button data-v="${v}" class="${v===den ? 'on' : ''}">${l}</button>`).join('')}</div>
     <div class="note" id="${k}FxN" style="margin-top:6px"></div></div>`; }
 function ufxWire(k, cs){ const box = $('#' + k + 'FxB'), n = $('#' + k + 'FxN'); if(!box) return;
-  const note = () => { const bad = cs.map(c => ufxFaces(c)).filter(x => !x.faces);
-    n.textContent = (k==='fn' ? "🎭 Each clip's face pass is done before the next clip is upscaled, and the next one carries on from the fixed faces, so the joins still line up. It goes clip by clip, so keep Reel open until it's done." : "🎭 Each upscale gets a face pass straight after (the same as ✂ Edit › 🎭 Fix faces), from the same start, so it still lines up with the clip before. The fixed ones show up as more options.")
-      + (bad.length ? ' ' + bad.map(x => x.why).join('. ') + (k==='fn' ? ' (those just get the upscale).' : '.') : ''); };
+  const note = () => { const bad = cs.map(c => ufxFaces(c)).filter(x => !x.ppl), who = ' Whose face is whose is worked out by itself: the faces are found over the whole hi-res video and matched to each character\'s 📚 Library pictures.';
+    n.textContent = (k!=='fn' ? "🎭 Each upscale gets a face pass straight after (the same as ✂ Edit › 🎭 Fix faces). The fixed ones show up as more options."
+      : ufxWay()==='chain' ? "🎭 Each clip's face pass is done before the next clip is upscaled, and the next one carries on from the fixed faces, so the joins line up. It goes clip by clip, so keep Reel open until it's done."
+      : "🎭 The whole reel is upscaled first (the usual way, quicker), then every clip gets its face pass over the hi-res video, then 🧵 the seams are blended (if that's on) so the joins stay smooth. Keep Reel open until it's done.")
+      + who + (bad.length ? ' ' + bad.map(x => x.why).join('. ') + ' (just the upscale there).' : ''); };
   $('#' + k + 'Fx').onchange = e => { S.upFx = e.target.checked; save(); box.hidden = !S.upFx; note(); };
+  $$('#' + k + 'FxW button').forEach(b => b.onclick = () => { S.upFxWay = b.dataset.w; save(); $$('#' + k + 'FxW button').forEach(x => x.classList.toggle('on', x===b)); note(); });
   $$('#' + k + 'FxS button').forEach(b => b.onclick = () => { S.fxDen = +b.dataset.v; save(); $$('#' + k + 'FxS button').forEach(x => x.classList.toggle('on', x===b)); }); note(); }
 const ufxDen = () => FX_LV.some(([v]) => v===S.fxDen) ? S.fxDen : FX_LV[0][0];
+const ufxWho = c => { const f = ufxFaces(c); return {ppl:f.ppl || null, fb:f.fb || null}; };
 function ufxAll(ok, den, UL){ const r = R();
-  r.ufx = {kind:'all', den, hm:upHm(), sl:cl(slOn(UL)), fx:ufxDen(), seam:S.finSeam!==false, items:ok.map(c => ({cid:c.id, take:c.pick, a:c.in || 0, b:endOf(c), cut:isCut(c), faces:ufxFaces(c).faces || null,
-    meta:Object.assign({}, (c.meta || {})[c.pick] || {}, {fin:true, src:c.pick, reup:0, whole:false, srcIn:c.in || 0, srcOut:c.out != null ? c.out : null}), words:wordsOf(c, c.pick), st:'wait'}))};
+  r.ufx = {kind:'all', den, hm:upHm(), sl:cl(slOn(UL)), fx:ufxDen(), seam:S.finSeam!==false, items:ok.map(c => Object.assign({cid:c.id, take:c.pick, a:c.in || 0, b:endOf(c), cut:isCut(c),
+    meta:Object.assign({}, (c.meta || {})[c.pick] || {}, {fin:true, src:c.pick, reup:0, whole:false, srcIn:c.in || 0, srcOut:c.out != null ? c.out : null}), words:wordsOf(c, c.pick), st:'wait', pick:true}, ufxWho(c)))};
   save(); closeSheet(); toast('🎬 Final pass with 🎭 faces: clip by clip, each one carrying on from the fixed clip before. Keep Reel open until it\'s done.', 7000); ufxTick(); }
-function ufxOne(c, ids, faces){ const r = R(); if(!r.ufx || !ufxBusy(r)) r.ufx = {kind:'one', fx:ufxDen(), items:[]};
-  ids.forEach(id => r.ufx.items.push({cid:c.id, kind:'one', faces, up:id, st:'up', fx0:ufxDen()})); save(); }
+// 'after': the Final pass was sent as usual; each clip's ✨ option then gets its face pass, all at once, and is picked
+function ufxAfter(pairs, seam){ const r = R(); r.ufx = {kind:'after', fx:ufxDen(), seam, items:pairs.map(([c, id]) => Object.assign({cid:c.id, up:id, st:'up', par:true, pick:true}, ufxWho(c)))}; save(); }
+function ufxOne(c, ids){ const r = R(), w = ufxWho(c); if(!r.ufx || !ufxBusy(r)) r.ufx = {kind:'one', fx:ufxDen(), items:[]};
+  ids.forEach(id => r.ufx.items.push(Object.assign({cid:c.id, up:id, st:'up', par:true, fx0:ufxDen()}, w))); save(); }
 function ufxText(){ const z = R() && R().ufx; if(!z) return ''; const it = z.items, d = it.filter(x => x.st==='done').length;
   return d===it.length ? '' : '🎭 Upscale + face pass: ' + d + ' of ' + it.length + ' done' + (z.kind==='all' ? ' (clip by clip)' : '') + '.'; }
 function ufxEnv(r){ try{ E.setLoraFirst && E.setLoraFirst(...lfSides(r), ltOf(r)); }catch(e){} try{ E.setAttrs && E.setAttrs(cl(r.attrs), cl(r.fit), JSON.parse(JSON.stringify(r.art || {})), r.scene==null ? 'auto' : r.scene, cl(r.doff)); }catch(e){} slSend(null); }
 let UFXB = false;
 async function ufxTick(){ if(UFXB || !E || !E.final || !E.faces || !READY) return; const r = R(), z = r && r.ufx; if(!z || !ufxBusy(r)) return;
-  UFXB = true; try{ const bad = s => /failed|gone/.test(info(s).state), num = c => r.clips.indexOf(c) + 1; let hold = false; // (hold: a 🎬 clip is waiting, so the 🎬 clips after it wait too; ⬆ single ones go on)
-    for(let i = 0; i < z.items.length; i++){ const x = z.items[i], c = r.clips.find(y => y.id===x.cid), one = x.kind==='one' || z.kind==='one'; if(x.st==='done' || (hold && !one)) continue;
+  UFXB = true; try{ const bad = s => /failed|gone/.test(info(s).state), num = c => r.clips.indexOf(c) + 1; let hold = false; // (hold: a 🎬 clip-by-clip clip is waiting, so the ones after it wait too; the others go on)
+    const keep = (x, c, msg) => { x.st = 'done'; x.res = x.up; if(msg) toast('🎭 Clip ' + num(c) + ': ' + msg + '. It keeps the upscale.', 6000); save(); };
+    for(let i = 0; i < z.items.length; i++){ const x = z.items[i], c = r.clips.find(y => y.id===x.cid), par = !!x.par; if(x.st==='done' || (hold && !par)) continue;
       if(!c){ x.st = 'done'; save(); continue; }
+      const wait = () => { if(!par) hold = true; };
       if(x.st==='wait'){ // (🎬 one clip at a time: the clip before has to be fully done, faces too)
         const P = z.items[i - 1]; if(P && P.st!=='done'){ hold = true; continue; }
         const ctx = !x.cut && P && P.res && doneOf(P.res) ? {take:P.res, at:info(P.res).secs} : null; ufxEnv(r);
         const q = await E.final({clips:[{take:x.take, a:x.a, b:x.b, ctx}], den:z.den, lstr:0, sl:cl(z.sl || []), hm:z.hm}).catch(e => ({err:e.message})), id = q && q.ids && q.ids[0];
         if(!id){ x.tries = (x.tries || 0) + 1; if(x.tries >= 3){ x.st = 'done'; x.res = null; toast('🎬 Clip ' + num(c) + " couldn't be upscaled: " + ((q && q.err) || 'not sent'), 6000); } save(); hold = true; continue; }
         x.up = id; x.st = 'up'; x.tries = 0; addTakes(c, [id], Object.assign({}, x.meta), x.words); c.pick = id; c.in = 0; c.out = null; c.up = true; save(); VSIG = ''; refresh(); hold = true; continue; }
-      if(x.st==='up'){ if(bad(x.up)){ x.st = 'done'; x.res = null; save(); continue; } if(!doneOf(x.up)){ if(!one) hold = true; continue; }
-        if(!x.faces){ x.st = 'done'; x.res = x.up; save(); continue; } ufxEnv(r);
-        const q = await E.faces({take:x.up, faces:x.faces, den:x.fx0 || z.fx}).catch(e => ({err:e.message})), id = q && q.ids && q.ids[0];
-        if(!id){ x.tries = (x.tries || 0) + 1; if(x.tries >= 3){ x.st = 'done'; x.res = x.up; toast('🎭 Clip ' + num(c) + "'s face pass wasn't sent: " + ((q && q.err) || 'not sent') + '. It keeps the upscale.', 6000); } save(); if(!one) hold = true; continue; }
-        x.fx = id; x.st = 'fx'; addTakes(c, [id], Object.assign({}, (c.meta || {})[x.up] || {}, {faces:true}), wordsOf(c, x.up)); if(!one && c.pick===x.up) c.pick = id; save(); VSIG = ''; refresh(); if(!one) hold = true; continue; }
+      if(x.st==='up'){ if(bad(x.up)){ x.st = 'done'; x.res = null; save(); continue; } if(!doneOf(x.up)){ wait(); continue; }
+        if(!x.ppl || !x.ppl.length){ keep(x, c, ''); continue; }
+        // 🔎 who's who: SAM 3 finds the faces over the whole hi-res clip
+        const q = E.faceId ? await E.faceId({take:x.up}).catch(e => ({err:e.message})) : {err:'no face finder'};
+        if(!q || q.err){ x.tries = (x.tries || 0) + 1; if(x.tries >= 3){ x.tries = 0; x.st = 'id'; x.q = null; x.why = (q && q.err) || 'not sent'; } save(); wait(); continue; }
+        x.q = q; x.st = 'id'; x.tries = 0; save(); wait(); continue; }
+      if(x.st==='id'){ let faces = null;
+        if(x.q){ const g = await E.faceIdGet(x.q).catch(() => null); if(!g){ if(Date.now() - (x.q.t0 = x.q.t0 || Date.now()) < 15 * 60000){ wait(); continue; } x.why = 'the face finder took too long'; }
+          else if(g.err) x.why = g.err;
+          else { const w = await faceWho(g, x.ppl).catch(e => ({err:e.message})); if(w.err) x.why = "faces couldn't be matched (" + w.err + ')'; else { faces = w.faces; x.who = {found:w.found, known:w.known, n:w.faces.length}; } } }
+        if(!faces || !faces.length) faces = x.fb; // (can't tell who's who: one person = number 0, or the numbers picked in ✂ Edit)
+        if(!faces || !faces.length){ keep(x, c, x.who && x.who.found ? "couldn't tell whose face is whose" : x.why ? 'no faces found (' + x.why + ')' : 'no faces found'); continue; }
+        x.faces = faces; ufxEnv(r);
+        const q = await E.faces({take:x.up, faces, den:x.fx0 || z.fx}).catch(e => ({err:e.message})), id = q && q.ids && q.ids[0];
+        if(!id){ x.tries = (x.tries || 0) + 1; if(x.tries >= 3) keep(x, c, "the face pass wasn't sent (" + ((q && q.err) || 'not sent') + ')'); else save(); wait(); continue; }
+        x.fx = id; x.st = 'fx'; x.tries = 0; addTakes(c, [id], Object.assign({}, (c.meta || {})[x.up] || {}, {faces:true}), wordsOf(c, x.up)); if(x.pick && c.pick===x.up) c.pick = id; save(); VSIG = ''; refresh(); wait(); continue; }
       if(x.st==='fx'){ if(bad(x.fx)){ x.st = 'done'; x.res = x.up; if(c.pick===x.fx && doneOf(x.up)) c.pick = x.up; save(); toast('🎭 A face pass failed, so clip ' + num(c) + ' keeps the upscale', 6000); continue; }
-        if(!doneOf(x.fx)){ if(!one) hold = true; continue; } x.st = 'done'; x.res = x.fx; save(); refresh(); continue; } }
-    if(!ufxBusy(r) && !z.told){ z.told = true; save(); if(z.kind==='all'){ toast('🎬 Final pass with 🎭 faces done', 5000); if(z.seam) seamStart(true); } else toast('🎭 Face-fixed upscales are ready as options', 5000); } }
+        if(!doneOf(x.fx)){ wait(); continue; } x.st = 'done'; x.res = x.fx; save(); refresh(); continue; } }
+    if(!ufxBusy(r) && !z.told){ z.told = true; save(); if(z.kind!=='one'){ toast('🎬 Final pass with 🎭 faces done', 5000); if(z.seam) seamStart(true); } else toast('🎭 Face-fixed upscales are ready as options', 5000); } }
   finally{ UFXB = false; } }
 setInterval(() => { if(!document.hidden) ufxTick(); }, 5000);
 document.addEventListener('click', e => { if(e.target.closest('#upOne')) upSheet(); if(e.target.closest('#linkOne') || e.target.closest('#warnLink')) linkSheet(); });
@@ -1458,6 +1515,6 @@ async function boot(){ for(let i = 0; i < 600 && !engOk(); i++) await new Promis
 document.addEventListener('visibilitychange', () => { if(!document.hidden && E){ E.refresh(); refresh(); } });
 window.addEventListener('resize', () => placeWheel());
 stampReels(); draw(); boot();
-window.REEL = {seamTick, seamStart, loopReel, loopTick, seamGroups, setTab, S:() => S, R, cur, clips, go, info:id => info(id), redoPlan, addClip, refresh, E:() => E, TH:() => TH, addTakes, reup:reupTick, isUp, saveTh, flushUndo, chainTick, ufxTick, ufxFaces};
+window.REEL = {seamTick, seamStart, loopReel, loopTick, seamGroups, setTab, S:() => S, R, cur, clips, go, info:id => info(id), redoPlan, addClip, refresh, E:() => E, TH:() => TH, addTakes, reup:reupTick, isUp, saveTh, flushUndo, chainTick, ufxTick, ufxFaces, faceAssign, faceWho, fapi};
 </script>
 </body></html>
