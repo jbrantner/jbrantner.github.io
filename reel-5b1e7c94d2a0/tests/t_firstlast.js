@@ -71,6 +71,19 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#ffBox [data-ff="phone"]')]); await fc.setFiles(process.env.PIC); await page.waitForTimeout(800);
   ok(await page.evaluate(() => !document.querySelector('#ffSolo').hidden && !document.querySelector('#lfRow').hidden), 'with a first frame and nobody in it: the "brings the picture to life" note and the 🏁 Last frame row show');
   const [fc2] = await Promise.all([page.waitForEvent('filechooser'), page.click('#lfBox [data-ff="phone"]')]); await fc2.setFiles(process.env.PIC); await page.waitForTimeout(800);
+  // 📱 iPhone (Jordan 2026-11-28: "sometimes it can take 3 times selecting the image before it actually appears")
+  ok(await page.evaluate(() => !document.getElementById('rlPick')), 'the picker leaves the page once it has answered');
+  const prevSrc = () => page.evaluate(() => document.querySelector('#ffPrev').getAttribute('src'));
+  let s0 = await prevSrc(); await page.evaluate(() => { window._cib = window.createImageBitmap; window.createImageBitmap = () => Promise.reject(new Error('iOS says no')); });
+  const [fc3] = await Promise.all([page.waitForEvent('filechooser'), page.click('#ffBox [data-ff="phone"]')]);
+  ok(await page.evaluate(() => !!document.getElementById('rlPick')), 'the picker stays on the page while the phone is choosing (Safari drops one that isn\'t)');
+  await fc3.setFiles(process.env.PIC); await page.waitForTimeout(1000);
+  let s1 = await prevSrc(); ok(s1 && s1!==s0, 'a big photo createImageBitmap can\'t read still shows on the first pick (plain picture fallback)');
+  await page.evaluate(png => { window.createImageBitmap = window._cib; REEL.E().picUrl = id => new Promise(r => setTimeout(() => r('data:image/png;base64,' + png), 1200)); }, PNG); // a slow PC
+  await page.click('#ffBox [data-ff="lib"]'); await page.waitForTimeout(100);
+  ok(await page.evaluate(() => { const im = document.querySelector('#ffLib img[data-ffpic]'); return !!im && !im.getAttribute('src'); }), 'Library pictures still loading from the PC');
+  await page.click('#ffLib img[data-ffpic]'); await page.waitForTimeout(2500);
+  let s2 = await prevSrc(); ok(s2 && s2!==s1 && await page.evaluate(() => document.querySelector('#ffLib').hidden), 'a Library picture tapped before it finished loading still becomes the first frame on the first tap');
   let n0 = sent.filter(x => x.g).length; await page.click('#mkGo'); await page.waitForTimeout(3000);
   const gs = sent.filter(x => x.g).slice(n0); ok(gs.length===2, '2 options sent with no characters (' + gs.length + ')');
   if(gs[0]){ const g = gs[0].g, ag = nodes(g, 'MiniMaxH3AddGuide').map(n => n.inputs.frame_idx), r = nodes(g, 'MiniMaxH3ReferenceToVideo')[0], p = r ? r.inputs.prompt : '';

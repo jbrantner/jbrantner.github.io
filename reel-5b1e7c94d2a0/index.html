@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-28-9">
+<meta name="reel-build" content="2026-11-28-10">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -429,7 +429,7 @@ function charSheet(id){ const x = id && E.lib().find(y => y.id===id), mine = !x 
     $('#chP').innerHTML = have.map(q => `<div><img data-pic="${esc(q)}" src="${esc(picSrc(q))}" alt=""><button data-dp="${esc(q)}">✕</button></div>`).join('') + add.map((f, k) => `<div><img src="${URL.createObjectURL(f)}" alt=""><button data-da="${k}">✕</button></div>`).join('');
     $('#chP').onclick = e => { const a = e.target.closest('[data-dp]'), b = e.target.closest('[data-da]'); if(a) drop.push(a.dataset.dp); if(b) add.splice(+b.dataset.da, 1); if(a || b) drawP(); }; };
   drawP();
-  $('#chAdd').onclick = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true; inp.onchange = () => { for(const f of inp.files || []) add.push(f); drawP(); }; inp.click(); };
+  $('#chAdd').onclick = () => pickFile(fs => { for(const f of fs) add.push(f); drawP(); }, true);
   $('#chGo').onclick = async () => { const name = $('#chN').value.trim(); if(!name){ toast('Give her a name'); return; } if(!x && !add.length){ toast('Add at least one picture'); return; }
     const b = $('#chGo'); b.disabled = true; b.textContent = 'Saving…'; const r = await E.saveChar({id:x && x.id, name, desc:$('#chD').value, files:add, drop});
     if(!r || r.err){ b.disabled = false; b.textContent = '✓ Save'; toast((r && r.err) || "Couldn't save her", 5000); return; }
@@ -459,7 +459,7 @@ function exSheet(id){ const nk = /^new:/.test(id) ? id.slice(4) : '', x = nk ? n
     $('#exP').innerHTML = have.map(q => `<div><img data-pic="${esc(q)}" src="${esc(picSrc(q))}" alt=""><button data-dp="${esc(q)}">✕</button></div>`).join('') + add.map((f, k) => `<div><img src="${URL.createObjectURL(f)}" alt=""><button data-da="${k}">✕</button></div>`).join('');
     $('#exP').onclick = e => { const a = e.target.closest('[data-dp]'), b = e.target.closest('[data-da]'); if(a) drop.push(a.dataset.dp); if(b) add.splice(+b.dataset.da, 1); if(a || b) drawP(); }; };
   drawP();
-  $('#exAdd').onclick = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true; inp.onchange = () => { for(const f of inp.files || []) add.push(f); drawP(); }; inp.click(); };
+  $('#exAdd').onclick = () => pickFile(fs => { for(const f of fs) add.push(f); drawP(); }, true);
   $('#exGo').onclick = async () => { const name = $('#exN').value.trim(); if(!name){ toast('Give it a name'); return; } if(!$('#exD').value.trim() && !add.length && !(x && x.pics.length)){ toast('Say what it looks like or add a picture'); return; }
     const b = $('#exGo'); b.disabled = true; b.textContent = 'Saving…'; const r = await E.saveChar({id:x && x.id, kind, name, desc:$('#exD').value, files:add, drop});
     if(!r || r.err){ b.disabled = false; b.textContent = '✓ Save'; toast((r && r.err) || "Couldn't save it", 5000); return; }
@@ -817,10 +817,19 @@ function addTakes(c, ids, meta, words){ if(meta && !meta.fin && (meta.src || met
 // 🖼 First frame (Jordan 2026-11-22: "In reels let's have a way to set the first frame"): a picture from the phone or the 📚 Library, cut to
 // the reel's shape on the phone (centre crop, so it isn't squashed), sent as H3 Deck's First frame: the clip starts on it exactly
 const ASPW = {'16:9':16 / 9, '9:16':9 / 16, '1:1':1};
-async function cropTo(blob){ const a = ASPW[(E && E.look ? E.look().aspect : '') || '16:9'] || 16 / 9, bm = await createImageBitmap(blob);
-  let w = bm.width, h = bm.height, x = 0, y = 0; if(w / h > a){ const nw = Math.round(h * a); x = Math.round((w - nw) / 2); w = nw; } else { const nh = Math.round(w / a); y = Math.round((h - nh) / 2); h = nh; }
+// iPhone fix (Jordan 2026-11-28: "sometimes it can take 3 times selecting the image before it actually appears"): Safari can throw away a file
+// picker that isn't on the page before it reports the pick, and createImageBitmap sometimes fails on big phone photos. The picker now lives on
+// the page until it answers, the picture is decoded with a plain <img> when createImageBitmap fails, and a later pick always wins.
+function pickFile(cb, multi, accept){ const old = document.getElementById('rlPick'); if(old) old.remove();
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = accept || 'image/*'; inp.multiple = !!multi; inp.id = 'rlPick';
+  inp.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0'; document.body.appendChild(inp);
+  inp.addEventListener('change', () => { const fs = [...(inp.files || [])]; setTimeout(() => inp.remove(), 0); if(fs.length) cb(fs); }); inp.click(); return inp; }
+async function bitmapOf(blob){ try{ return await createImageBitmap(blob); }catch(e){}
+  const u = URL.createObjectURL(blob); try{ const im = new Image(); im.decoding = 'async'; await new Promise((ok, no) => { im.onload = ok; im.onerror = no; im.src = u; }); if(im.decode) await im.decode().catch(() => {}); return {width:im.naturalWidth, height:im.naturalHeight, img:im}; } finally { setTimeout(() => URL.revokeObjectURL(u), 1000); } }
+async function cropTo(blob){ const a = ASPW[(E && E.look ? E.look().aspect : '') || '16:9'] || 16 / 9, b0 = await bitmapOf(blob), bm = b0.img || b0;
+  let w = b0.width, h = b0.height, x = 0, y = 0; if(!w || !h) throw new Error('empty'); if(w / h > a){ const nw = Math.round(h * a); x = Math.round((w - nw) / 2); w = nw; } else { const nh = Math.round(w / a); y = Math.round((h - nh) / 2); h = nh; }
   const k = Math.min(1, 1600 / Math.max(w, h)), cv = document.createElement('canvas'); cv.width = Math.round(w * k); cv.height = Math.round(h * k);
-  cv.getContext('2d').drawImage(bm, x, y, w, h, 0, 0, cv.width, cv.height); return await new Promise(ok => cv.toBlob(b => ok(b), 'image/jpeg', 0.93)); }
+  cv.getContext('2d').drawImage(bm, x, y, w, h, 0, 0, cv.width, cv.height); const out = await new Promise(ok => cv.toBlob(b => ok(b), 'image/jpeg', 0.93)); if(!out) throw new Error('empty'); return out; }
 // 🏁 Last frame (Jordan 2026-11-26: "if we need to do first and last frame…"): H3 Deck's First / last frame on the same models, shown once a
 // first frame is set. With nobody from the 📚 Library in the clip it just animates the picture(s): no stand-in character needed.
 const FF = {first:{p:'ff', lab:'🖼 First frame', note:'optional: the clip starts on this picture', file:'first-frame.jpg'}, last:{p:'lf', lab:'🏁 Last frame', note:'optional: the clip ends on this picture', file:'last-frame.jpg'}};
@@ -832,15 +841,19 @@ function firstRow(){ return picRow('first') + picRow('last') + '<div class="note
 function picWire(o, k){ const P = FF[k].p, B = k + 'Blob', U = k + 'Url';
   const show = () => { const p = $('#' + P + 'Prev'); if(o[B]){ if(o[U]) URL.revokeObjectURL(o[U]); o[U] = URL.createObjectURL(o[B]); p.src = o[U]; p.hidden = false; } else { p.hidden = true; p.removeAttribute('src'); }
     $('#' + P + 'Box [data-ff="off"]').hidden = !o[B]; if(k==='first'){ const lr = $('#lfRow'); if(lr) lr.hidden = !o.firstBlob; } ffSolo(o); };
-  const take = async b => { try{ o[B] = await cropTo(b); show(); $('#' + P + 'Lib').hidden = true; }catch(e){ toast("Couldn't read that picture", 5000); } };
+  let seq = 0; const busy = on => { const p = $('#' + P + 'Box'); if(p) p.style.opacity = on ? '.6' : ''; };
+  const take = async b => { const my = ++seq; busy(true); try{ const c = await cropTo(b); if(my!==seq) return; o[B] = c; if(!$('#' + P + 'Box')) return; show(); $('#' + P + 'Lib').hidden = true; }
+    catch(e){ if(my===seq) toast("Couldn't read that picture", 5000); } finally { if(my===seq) busy(false); } };
   $('#' + P + 'Box').onclick = async e => { const b = e.target.closest('[data-ff]'); if(!b) return; const m = b.dataset.ff;
     if(m==='off'){ o[B] = null; show(); return; }
-    if(m==='phone'){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.onchange = () => { const f = inp.files && inp.files[0]; if(f) take(f); }; inp.click(); return; }
+    if(m==='phone'){ pickFile(fs => take(fs[0])); return; }
     const box = $('#' + P + 'Lib'); if(!box.hidden){ box.hidden = true; return; } const lib = E ? E.lib() : [], ids = new Set([].concat(o.who || [], castOf()));
     const pics = lib.filter(x => ids.has(x.id) || !ids.size).flatMap(x => (x.pics || []).map(id => ({id, name:x.name})));
     box.innerHTML = pics.length ? pics.map(p => `<img data-ffpic="${esc(p.id)}" alt="${esc(p.name)}" title="${esc(p.name)}" style="height:84px;min-width:48px;border-radius:8px;border:1px solid var(--line);flex:none;background:var(--panel2)">`).join('') : '<span class="note">No pictures for the people in this clip yet.</span>';
     box.hidden = false; box.querySelectorAll('img[data-ffpic]').forEach(im => E.picUrl(im.dataset.ffpic).then(u => { if(u) im.src = u; }).catch(() => {}));
-    box.onclick = async ev => { const im = ev.target.closest('[data-ffpic]'); if(!im || !im.src) return; try{ const bl = await (await fetch(im.src)).blob(); take(bl); }catch(err){ toast("Couldn't get that picture from the PC", 5000); } }; };
+    box.onclick = async ev => { const im = ev.target.closest('[data-ffpic]'); if(!im) return; box.querySelectorAll('img[data-ffpic]').forEach(x => x.style.outline = x===im ? '2px solid var(--acc, #ff5ca8)' : '');
+      try{ const u = im.getAttribute('src') || await E.picUrl(im.dataset.ffpic); if(!u) throw new Error('no link'); if(!im.getAttribute('src')) im.src = u; const r = await fetch(u); if(!r.ok) throw new Error('HTTP ' + r.status); take(await r.blob()); }
+      catch(err){ toast("Couldn't get that picture from the PC", 5000); } }; };
   show(); }
 // the "just the picture" note: a first frame and nobody picked or named in the words
 function ffSolo(o){ const n = $('#ffSolo'); if(!n) return; const w = ($('#mkW') || $('#rdW') || {}).value || ''; n.hidden = !o.firstBlob || (o.who || []).length > 0 || named(w).length > 0; }
@@ -883,9 +896,8 @@ function angleSheet(i){ const c = clips()[i]; if(!c || !doneOf(c.pick)){ toast('
     const nc = addClip(i + 1, {kind:'angle', words:o.words, who:o.who, look:cl(L), ref, from:c.pick}); addTakes(nc, ids, {look:cl(L), angle:a}, o.words); }; }
 
 // 📤 a clip from the phone
-function uploadPick(at){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'video/*';
-  inp.onchange = async () => { const f = inp.files && inp.files[0]; if(!f) return; const r = await E.upload({file:f}); if(!r || r.err){ toast((r && r.err) || 'Not uploaded', 6000); return; }
-    addClip(at == null ? clips().length : Math.min(at, clips().length), {kind:'upload', words:'', takes:r.ids}); toast('📤 Getting your clip ready on the PC (a few seconds)'); }; inp.click(); }
+function uploadPick(at){ pickFile(async fs => { const f = fs[0]; if(!f) return; const r = await E.upload({file:f}); if(!r || r.err){ toast((r && r.err) || 'Not uploaded', 6000); return; }
+    addClip(at == null ? clips().length : Math.min(at, clips().length), {kind:'upload', words:'', takes:r.ids}); toast('📤 Getting your clip ready on the PC (a few seconds)'); }, false, 'video/*'); }
 
 // ➕ Next / ⇿ Insert
 function nextSheet(){ const i = curI(), c = cur(), N = clips()[i + 1]; if(!c) return;
