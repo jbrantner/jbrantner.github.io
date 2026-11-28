@@ -101,6 +101,19 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   { const L1 = await eng.evaluate(() => H3.S.takes[0].lead), G1 = graphs().slice(n0)[0].g, cm = nodes(G1, 'ColorMatch');
     ok(L1.k0===0 && !L1.clipA && L1.clipB && L1.clipB.o % 17===0 && L1.base.str===0.35 && cm.length >= 3 && cm[cm.length - 1].inputs.strength===1 && cm[0].inputs.strength < 0.5, 'first clip: no clip before, the clip after pinned on a block, Light 0.35, colour eased only at its end (' + JSON.stringify({k0:L1.k0, B:L1.B, b:L1.clipB, cm:cm.map(n => n.inputs.strength)}) + ')'); }
   await finish();
+  // 🎛 the sheet's own model pick (Jordan 2026-11-28): starts on ⚙ Settings' model, is used for this send only
+  await page.evaluate(() => REEL.go(1)); await page.waitForTimeout(400); await page.click('#linkOne'); await page.waitForTimeout(300);
+  { const m0 = await page.evaluate(() => REEL.E().look().model), op = await page.evaluate(() => [...document.querySelectorAll('#lkM option')].map(o => ({v:o.value, on:o.selected, t:o.textContent})));
+    ok(op.length >= 2 && op.find(o => o.on).v===m0 && /\(Settings\)/.test(op.find(o => o.on).t), '🎛 Re-link has a Model pick, starting on the Settings model (' + JSON.stringify({m0, op}) + ')');
+    const alt = op.find(o => !o.on && !/#/.test(o.v)).v; await page.selectOption('#lkM', alt);
+    n0 = graphs().length; await page.click('#lkGo'); await page.waitForTimeout(2500);
+    const t2 = await eng.evaluate(() => ({model:H3.S.takes[0].model, relink:!!(H3.S.takes[0].lead && H3.S.takes[0].lead.base)})), m1 = await page.evaluate(() => REEL.E().look().model);
+    ok(t2.relink && t2.model===alt && m1===m0, '🎛 the re-link runs on the picked model and Settings keeps its own (' + JSON.stringify({t2, alt, m0, m1}) + ')');
+    await finish();
+    const r = await page.evaluate(async alt => { const E = REEL.E(), cs = REEL.clips(); return E.fill({takeA:cs[0].pick, outA:1, takeB:cs[1].pick, inB:0, secs:1, words:'Mia waves', who:['Lmia'], n:1, model:alt}); }, alt);
+    const t3 = await eng.evaluate(() => H3.S.takes[0].model), m2 = await page.evaluate(() => REEL.E().look().model);
+    ok(r && r.ids && t3===alt && m2===m0, '🎛 🪄 blend / ⇿ fill take a model too, Settings untouched (' + JSON.stringify({t3, alt, m2}) + ')');
+    await finish(); }
   // ➕ Next gets the keep line after the [0s-1s] anchor (never inside it)
   { const r = await page.evaluate(async () => { const cs = REEL.clips(), x = await REEL.E().carry({take:cs[2].pick, at:REEL.info(cs[2].pick).secs, words:'Mia sits down', who:['Lmia'], n:1}); return x; });
     const p = await eng.evaluate(() => H3.S.takes[0].prompt);
