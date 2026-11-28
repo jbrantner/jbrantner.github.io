@@ -9,12 +9,13 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
 const SCHEMA = {
   UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'singularityV2X10eros_prismPIKA.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'glow.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  MinimaxH3LatentUpscaler3D:{input:{required:{model_name:[['minimax_h3_latent_upscaler_3d_bf16.safetensors']]}}},
   MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
   ImageBatch:{input:{required:{image1:['IMAGE'], image2:['IMAGE']}}},
 };
-const OTHER = ['ColorMatch','ConditioningSetTimestepRange','ConditioningCombine','MiniMaxH3ReferenceToVideo','NAGGuiderMiniMaxH3','CLIPTextEncode','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
+const OTHER = ['RepeatImageBatch','ColorMatch','ConditioningSetTimestepRange','ConditioningCombine','MiniMaxH3ReferenceToVideo','NAGGuiderMiniMaxH3','CLIPTextEncode','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
   'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
   'BboxDetectorSEGS','UltralyticsDetectorProvider','SplitSigmas','DisableNoise','SegsToCombinedMask','MaskToImage','PreviewImage','Video Slice','ImageFromBatch','TrimAudioDuration','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent','ManualSigmas'];
 const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
@@ -122,10 +123,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await page.click('#pairOne'); await page.waitForTimeout(300);
     if(own) await page.selectOption('#prM', 'own');
     n0 = graphs().length; await page.click('#prGo'); await page.waitForTimeout(2500);
+    const card = await page.evaluate(() => { REEL.refresh(); const a = document.querySelector('#opts [data-sj]'); return a ? a.textContent : ''; });
+    await page.evaluate(() => REEL.go(2)); await page.waitForTimeout(400); const card2 = await page.evaluate(() => { const a = document.querySelector('#opts [data-sj]'); return a ? a.textContent : ''; }); await page.evaluate(() => REEL.go(1)); await page.waitForTimeout(300);
+    ok(/Blending the seam/.test(card) && /%/.test(card) && /Blending the seam/.test(card2), '🧵 a rendering card with its % shows under both clips while the seam blends (' + JSON.stringify([card, card2]) + ')');
     const sg = graphs().slice(n0); const tk = await eng.evaluate(() => { const t = H3.S.takes[0], src = H3.S.takes.find(x => x.id===t.combo.parts[0].take); return {seam:t.combo && t.combo.seam, parts:t.combo.parts.length, model:t.model, srcModel:src ? src.model : ''}; });
     ok(sg.length===1 && tk.seam && tk.seam.one && tk.parts===2 && (own ? tk.model===tk.srcModel && !tk.seam.unet : /prism/i.test(tk.seam.unet)),
       '🧵 one job: the two clips joined, the join repainted on ' + (own ? "the clips' own model" : 'PRISM PIKA') + ' (' + JSON.stringify(Object.assign({}, tk, {n:sg.length})) + ')');
     await finish(); await page.evaluate(() => REEL.pairTick()); await page.waitForTimeout(1500);
+    ok(await page.evaluate(() => { REEL.refresh(); return !document.querySelector('#opts [data-sj]'); }), '🧵 the card goes once the blended stretch is back as an option');
     const b1 = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length, seam:!!(c.meta[c.pick] || {}).seam, len:(c.out != null ? c.out : REEL.info(c.pick).secs) - (c.in || 0)})));
     ok(b1[0].pick===b0[0].pick && b1[1].seam && b1[2].seam && b1[1].pick===b1[2].pick && b1[1].pick!==b0[1].pick && b1[1].n===b0[1].n + 1 && Math.abs(b1[1].len - b0[1].len) < 0.05 && Math.abs(b1[2].len - b0[2].len) < 0.05,
       '🧵 clips 2 and 3 pick their own stretch of it, same lengths; clip 1 untouched (' + JSON.stringify({b0, b1}) + ')'); }
@@ -138,11 +143,46 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const un = G ? Object.values(G.g).filter(n => n.class_type==='UNETLoader').map(n => n.inputs.unet_name) : [];
     ok(tk.seam && /ref2va/.test(tk.model) && tk.fin && un.some(u => /ref2va/.test(u)) && un.some(u => /prismPIKA/.test(u)), '🧵 H3 Reference → PIKA finish repaints the seam on both models (' + JSON.stringify({tk, un}) + ')');
     await finish(); await page.evaluate(() => REEL.pairTick()); await page.waitForTimeout(1000); }
+  // ⬆ Upscale this option with changed words; ✂ Edit › 🎨 Change it with a Model pick on the upscaled option comes back upscaled (Jordan 2026-11-28)
+  { await page.evaluate(() => REEL.go(1)); await page.waitForTimeout(400); await page.click('#upOne'); await page.waitForTimeout(300);
+    const w0 = await page.evaluate(() => document.querySelector('#upW').value);
+    ok(/part 2/.test(w0), '⬆ the upscale sheet shows the words (' + JSON.stringify(w0) + ')');
+    await page.fill('#upW', 'Mia twirls her red umbrella in the rain'); await page.click('#upN [data-v="1"]').catch(() => {});
+    n0 = graphs().length; const nT = await eng.evaluate(() => H3.S.takes.length); await page.click('#upGo');
+    for(let k = 0; k < 20 && await eng.evaluate(n => H3.S.takes.length===n, nT); k++) await page.waitForTimeout(300);
+    const u = await eng.evaluate(() => { const t = H3.S.takes[0]; return {prompt:t.prompt, scale:t.up && t.up.scale, id:t.id}; });
+    ok(u.scale > 1 && /<Subject 1> twirls her red umbrella in the rain/.test(u.prompt), '⬆ the ✨ pass gets the changed words (' + JSON.stringify(u) + ')');
+    await finish(); await page.evaluate(() => { REEL.upAfterTick(); }); await page.waitForTimeout(300);
+    const upId = await page.evaluate(() => { const c = REEL.cur(), id = c.takes.find(x => (c.meta[x] || {}).fin); c.pick = id; REEL.refresh(); return id; }); await page.waitForTimeout(400);
+    ok(!!upId && await page.evaluate(() => REEL.cur().tw[REEL.cur().pick]==='Mia twirls her red umbrella in the rain'), '⬆ the upscaled option keeps the changed words');
+    await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="change"]'); await page.waitForTimeout(300);
+    const cm = await page.evaluate(() => ({op:[...document.querySelectorAll('#edCM option')].map(o => o.value), note:/upscaled too/.test(document.querySelector('#edCh').textContent)}));
+    ok(cm.op.length >= 3 && cm.note, '🎨 Change it has a Model pick and says the change comes back upscaled (' + JSON.stringify(cm) + ')');
+    const pk = cm.op.find(v => /prismpika/.test(v)); await page.selectOption('#edCM', pk); await page.fill('#edW', 'Mia closes her umbrella');
+    const nT2 = await eng.evaluate(() => H3.S.takes.length); await page.click('#edCGo');
+    for(let k = 0; k < 40 && await page.evaluate(() => !!document.querySelector('#edCGo')); k++) await page.waitForTimeout(300);
+    const ch = await eng.evaluate(() => { const t = H3.S.takes[0]; return {id:t.id, model:t.model, redo:!!t.redo, up:!!t.up}; }), m0 = await page.evaluate(() => REEL.S().reelModel || REEL.E().look().model);
+    const meta = await page.evaluate(id => (REEL.cur().meta[id] || {}), ch.id);
+    ok(ch.redo && !ch.up && ch.model===pk && meta.upAfter && !meta.fin && !/prismpika/.test(m0), '🎨 the change runs on the picked model (Settings untouched) and is marked to be upscaled (' + JSON.stringify({ch, upAfter:meta.upAfter, m0}) + ')');
+    await page.evaluate(id => { REEL.cur().pick = id; }, ch.id);
+    await finish(); const nT3 = await eng.evaluate(() => H3.S.takes.length); await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(1500);
+    const au = await eng.evaluate(src => { const t = H3.S.takes.find(x => x.up && x.redo && x.redo.src===src); return t ? {scale:t.up.scale, id:t.id, src:t.redo.src} : null; }, ch.id);
+    // (the fake PCs fail the ✨ pass itself, so the clip falls back off it: the pick is checked on the metadata and the pick made at send time)
+    const pc = await page.evaluate(id => { const c = REEL.cur(); return {m:c.meta[id], src:c.meta[(c.meta[id] || {}).src] || {}}; }, au && au.id);
+    ok(au && au.scale > 1 && au.src===ch.id && pc.m && pc.m.fin && pc.m.src===ch.id && pc.src.upAfter && pc.src.upAfter.sent===au.id, '⬆ once done, the change gets the ✨ upscale and that version is picked (' + JSON.stringify({au, pc}) + ')');
+    { const r = await page.evaluate(async () => { const c = REEL.cur(), id = c.takes[0], p0 = c.pick; (c.meta[id] = c.meta[id] || {}).upAfter = {den:0.9, hm:'pika', sl:[]}; c.pick = id;
+        const E = REEL.E(), f0 = E.final, other = REEL.clips()[0].pick; E.final = async () => ({ids:[other]}); try{ await REEL.upAfterTick(); }finally{ E.final = f0; } const res = {picked:c.pick===other, id, meta:c.meta[other] && c.meta[other].src===id};
+        c.takes = c.takes.filter(x => x!==other); delete c.meta[other]; delete c.meta[id].upAfter; c.pick = p0; REEL.refresh(); return res; });
+      ok(r && r.picked && r.meta, '⬆ when the change is the picked option, its upscale is picked (' + JSON.stringify(r) + ')'); }
+    await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(800);
+    ok(await eng.evaluate(n => H3.S.takes.filter(t => t.redo && t.redo.src===n).length, ch.id)===1, '⬆ only one upscale per change');
+    for(let k = 0; k < 3; k++){ await finish(); await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(800); } await finish();
+    ok(await page.evaluate(() => REEL.clips().every(c => c.takes.every(id => !(c.meta[id] || {}).upAfter || (c.meta[id].upAfter || {}).sent))), '⬆ every change option of the upscaled clip got its upscale'); }
   // ➕ Next gets the keep line after the [0s-1s] anchor (never inside it)
   { const r = await page.evaluate(async () => { const cs = REEL.clips(), x = await REEL.E().carry({take:cs[2].pick, at:REEL.info(cs[2].pick).secs, words:'Mia sits down', who:['Lmia'], n:1}); return x; });
     const p = await eng.evaluate(() => H3.S.takes[0].prompt);
     ok(/^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] The room, the objects and the light stay exactly as they were a moment ago\. <Subject 1> sits down$/.test(p) && !/same people/.test(p), '➕ Next: the anchor stays first, the room-only keep line opens the [1s-] part (' + JSON.stringify(p) + ')'); }
-  { const p = await page.evaluate(async () => { const E = REEL.E(), cs = REEL.clips(); await E.fill({takeA:cs[0].pick, outA:1, takeB:cs[1].pick, inB:0, secs:1, words:'Mia waves', who:['Lmia'], n:1, keep:false}); return 1; });
+  { const p = await page.evaluate(async () => { const E = REEL.E(), cs = REEL.clips(); return await E.fill({takeA:cs[0].pick, outA:1, takeB:cs[1].takes[0], inB:0, secs:1, words:'Mia waves', who:['Lmia'], n:1, keep:false}); });
     const q = await eng.evaluate(() => H3.S.takes[0].prompt); ok(!/room, the objects/.test(q), 'keep:false leaves the line out (' + JSON.stringify(q) + ')'); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
