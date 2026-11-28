@@ -86,3 +86,10 @@ A folder another option still uses (shared parts, carry-ons) stays. An older hel
 Since later the same day (Jordan: "let's have those delete their files too if they're removed"), finished options you remove go the same
 way once their ↩ Undo is gone (✕, 🧹 Keep only this, a removed clip or reel), unless another option carried on from them. Options that
 failed on their own keep their files. Test: `tests/t_cancel_drop.js`.
+
+## 🌙 Keeps going with the phone off (Jordan 2026-11-28)
+Every 15 s on screen Reel tells Render's helper (`/renderdeck/h3run/beat`) whether anything is still going (engine takes, 🎭 face passes,
+🎬 / 🧵 runs). Going into the background with work left, it leaves a copy on Render (`/userdata/h3reel_run.json`: its reels, the engine's
+takes, H3 Deck's Library) and holds. After 90 s the helper opens H3 Deck hidden (`?worker=1`); seeing Reel's copy is the newer one, it
+goes to `h3-a875336252cb/reelw/`, which loads Reel with this copy and H3 Deck from Render as its engine, and carries on. Back on the phone,
+the hidden copy saves and stops, and the phone takes its copy over (one reload, "🌙 Picked up where Render left off"). Test `tests/t_away.js`.

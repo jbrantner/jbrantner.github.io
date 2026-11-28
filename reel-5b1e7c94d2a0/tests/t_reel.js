@@ -408,7 +408,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // H3 Deck's own save is untouched, nothing was sent over its copies on the PCs
   const deck = await page.evaluate(() => JSON.parse(localStorage.getItem('h3deck')));
   ok(deck.takes.length===1 && deck.takes[0].id==='tDeck' && deck.media.mOld && deck.lib.length===4, "H3 Deck's own save is untouched (its take and pictures are still there)");
-  ok(!sent.some(x => x.userdata && /h3deck_(takes|films|run)/.test(x.userdata)) && !sent.some(x => x.run), "the engine never writes H3 Deck's copies on the PCs or wakes the 🌙 hidden copy");
+  ok(!sent.some(x => x.userdata && /h3deck_(takes|films|run)/.test(x.userdata)) && !sent.some(x => x.run && !/\/h3run\/beat$/.test(x.run)), "the engine never writes H3 Deck's copies on the PCs or wakes the 🌙 hidden copy (Reel's own 🌙 check-ins are fine)");
   // H3 Deck itself still opens normally on its own save
   const p2 = await ctx.newPage(); p2.on('pageerror', e => { console.log('DECK PAGE ERROR', e.message); fails++; });
   await p2.route(R + '/**', fake); await p2.addInitScript(r => { window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
