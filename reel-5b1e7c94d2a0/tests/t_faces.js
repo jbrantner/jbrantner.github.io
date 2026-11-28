@@ -8,7 +8,7 @@ if(!CLIP || !fs.existsSync(CLIP)){ console.log('set CLIP to a short video'); pro
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
   UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'singularityV2X10eros_prismPIKA.safetensors']], weight_dtype:[['default']]}}},
-  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'glow.safetensors', 'open_regenerate_h3_ref2va.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'glow.safetensors', 'minimax_h3_anime_style.safetensors', 'open_regenerate_h3_ref2va.safetensors']], strength_model:['FLOAT', {default:1}]}}},
   MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
@@ -132,6 +132,17 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const imgs = C('LoadImage').length; ok(imgs >= 1, "her Library picture goes with it (" + imgs + ')');
   const sf = await page.evaluate(([k0]) => { const c = REEL.cur(), nid = c.takes[c.takes.length - 1]; return {more:c.takes.length===k0 + 1, meta:c.meta[nid], closed:document.querySelector('#sheet').hidden}; }, [tk0]);
   ok(sf.more && sf.meta && sf.meta.faces===true && sf.meta.same===pick && sf.closed, 'the fixed version is a new option of the clip, marked as the same shot as its source (' + JSON.stringify(sf) + ')');
+  // 🎛 the face pass's own model and 🎨 style LoRA (Jordan 2026-11-28)
+  { await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="faces"]'); await page.waitForTimeout(400);
+    const m0 = await page.evaluate(() => ({hm:[...document.querySelectorAll('#edFxHm button')].map(b => b.textContent + (b.classList.contains('on') ? '*' : '')).join(), sl:!!document.querySelector('#edFxSl [data-sa]'), sub:(document.querySelector('#edFxSl .note') || {}).textContent}));
+    ok(m0.hm==='PRISM PIKA*,MiniMax only,TriPRISM' && m0.sl && /face pass/.test(m0.sub), '🎛 Fix faces has a Model pick (PRISM PIKA first) and a 🎨 Style LoRA row (' + JSON.stringify(m0) + ')');
+    await page.click('#edFxHm [data-hm="minimax"]'); await page.click('#edFxSl [data-sa]'); await page.waitForTimeout(100);
+    const lo = await page.evaluate(() => [...document.querySelectorAll('#edFxSl [data-sn] option')].map(o => o.value).filter(v => v && !/turbo|regenerate|step/i.test(v))[0]); console.log('style LoRA', lo); await page.selectOption('#edFxSl [data-sn]', lo); await page.waitForTimeout(100);
+    const nT = await eng.evaluate(() => H3.S.takes.length); await page.evaluate(() => { document.querySelector('#edFxGo').disabled = false; }); await page.click('#edFxGo');
+    for(let k = 0; k < 20 && await eng.evaluate(n => H3.S.takes.length===n, nT); k++) await page.waitForTimeout(300);
+    const t2 = await eng.evaluate(() => { const t = H3.S.takes[0]; return {unet:t.up && t.up.unet, van:!!(t.up && t.up.van), loras:(t.loras || []).map(l => l.name + '@' + l.str)}; });
+    ok(/ref2va/.test(t2.unet) && t2.van && t2.loras.some(x => x===lo + '@0.8'), '🎛 the face pass runs on MiniMax with the style LoRA on top (' + JSON.stringify(t2) + ')');
+    ok(await page.evaluate(lo => REEL.S().fxHm==='minimax' && (REEL.S().fxSl || [])[0].name===lo, lo), 'the face model and style LoRA are remembered'); }
   if(process.env.SHOT){ await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="faces"]'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT, fullPage:true}); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();

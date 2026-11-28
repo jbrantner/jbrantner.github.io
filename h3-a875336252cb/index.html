@@ -6643,7 +6643,7 @@ window.H3Combine = async o => { const parts = [];
     let acc = 0; const fr = []; parts.forEach((q, i) => { if(i) fr.push(Math.round(acc * FPS)); acc += q.out - q.in; });
     let root = src; while(root && root.redo && root.redo.src){ const r = deckTake(root.redo.src); if(!r) break; root = r; }
     t.combo.seam = Object.assign({}, o.seam, {frames:fr, one:true}); t.seed = Math.floor(Math.random() * 2 ** 31);
-    Object.assign(t, {model:o.seam.unet ? famKey(o.seam.unet) : root.model, turbo:o.seam.unet ? true : root.turbo, steps:o.seam.unet ? '' : root.steps, loras:JSON.parse(JSON.stringify(lorasOf(root))), imgs:JSON.parse(JSON.stringify(root.imgs || [])), h3:root.h3, film:root.film || t.film, fin:null}); }
+    Object.assign(t, {model:o.seam.unet ? famKey(o.seam.unet) : root.model, turbo:o.seam.unet ? true : root.turbo, steps:o.seam.unet ? '' : root.steps, loras:JSON.parse(JSON.stringify(lorasOf(root))), imgs:JSON.parse(JSON.stringify(root.imgs || [])), h3:root.h3, film:root.film || t.film, fin:null}); if(o.seam.sets) Object.assign(t, JSON.parse(JSON.stringify(o.seam.sets))); }
   S.takes.unshift(t); drawTakes();
   try{ await sendPieces(t, 0); }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not joined: ' + e.message, 6000); save(); return 0; }
   save(); drawTakes(); return 1; };
@@ -7036,9 +7036,12 @@ if(ENGINE){
       const fs = (o.faces || []).map(f => { const L = libOf(f.lib); if(!L || !(+f.obj >= 0)) return null; const c = libToCast(L); libFill(c, L); return {n:c.n, obj:+f.obj}; }).filter(Boolean);
       if(!fs.length) return {err:'Pick whose face is whose first'};
       if(fs.some(f => !faceRefs(t, f.n).length)) return {err:'Someone picked has no pictures in the Library, so there is nothing to draw her face from'};
-      const pk = hqUnets().find(x => /prism_?pika/i.test(x)) || '', key = uid('k'), D = takeFrames(t) / FPS;
+      // (Reel 2026-11-28) o.hm = the face pass's model: 'pika' (default), 'minimax' (vanilla H3 Reference), 'triprism'; o.sl = 🎨 style LoRAs on top of the clip's own
+      const van = o.hm==='minimax', tri = o.hm==='triprism', pk = van ? vanUnet() : tri ? triUnet() : hqUnets().find(x => /prism_?pika/i.test(x)) || '', key = uid('k'), D = takeFrames(t) / FPS;
+      if(van && !pk) return {err:'No PC lists the MiniMax H3 Reference model yet'}; if(tri && !pk) return {err:'No PC lists the TriPRISM model yet'};
+      const fxSl = (Array.isArray(o.sl) ? o.sl : []).filter(l => l && l.name).map(l => ({name:String(l.name), str:l.str != null && l.str!=='' ? +l.str : 1, words:String(l.words || '').trim(), style:true}));
       let n = 0; try{ n = await window.H3Nudge({take:t.id, a:Math.max(0, +o.a || 0), b:o.b != null ? Math.min(D, +o.b) : D, n:1, den:+o.den || 0.5, clean:0, look:t.h3 && /^(2d|cartoon|anime)/i.test(t.h3.scene || '') ? 'anime' : 'live',
-        faces:fs, find:'face', zoom:true, unet:pk, str:o.lstr != null ? +o.lstr : 0.4, trk:{a:0, b:D}, key, quiet:true}); }catch(e){ return {err:e.message}; }
+        faces:fs, find:'face', zoom:true, unet:pk, van, str:o.lstr != null ? +o.lstr : 0.4, trk:{a:0, b:D}, key, quiet:true, ...(fxSl.length ? {loras:lorasOf(t).filter(l => !fxSl.some(x => x.name===l.name)).map(l => Object.assign({}, l)).concat(fxSl)} : {})}); }catch(e){ return {err:e.message}; }
       const ids = S.takes.filter(x => x.redo && x.redo.key===key).map(x => x.id); return n && ids.length ? {ids} : {err:'Not sent. Is the PC on?'}; },
     // 🎬 Final pass (Jordan 2026-11-20: "basically just the 'upscale track' from Render Deck H3"): ✨ High quality on every clip, in order, with
     // Prism Pika, each clip carrying on from the ✨ result of the clip before (H3 Motion Context, one PC), as Films' ⬆ Upscale track does.
@@ -7047,8 +7050,10 @@ if(ENGINE){
     // 🧵 Blend the seams (Reel, Jordan 2026-11-24: "The shadows change fairly hard on the seam. Didn't H3 Deck have a good way to blend the
     // seams?"): the ⬆ Upscale track's 🧵 seams, as one job: the clips' stretches joined, then each join repainted with about 1 s of both
     // clips' real motion pinned on each side (half = frames repainted each side of the join), on Prism Pika like the ✨ passes
-    seam:async o => { const pk = o.own ? '' : hqUnets().find(x => /prism_?pika/i.test(x)) || '', b = before(); /* o.own (Reel's 🧵 Blend one seam, 2026-11-28): the clip's own model, steps and LoRAs */
-      const n = await window.H3Combine({parts:(o.parts || []).map(q => ({take:q.take, in:+q.a || 0, out:+q.b})), seam:{rk:uid('k'), unet:pk, qw:o.qw || '', half:Math.max(2, Math.min(24, +o.half || BRIDGE_HALF))}});
+    seam:async o => { const pk = o.own || o.model ? '' : hqUnets().find(x => /prism_?pika/i.test(x)) || '', b = before(); /* o.own (Reel's 🧵 Blend one seam, 2026-11-28): the clip's own model, steps and LoRAs */
+      // (Jordan 2026-11-28: "I want access to all of them") o.model = any of Reel's ⚙ model picks (finish included), as Re-link takes it
+      const sets = o.model && (o.parts || [])[0] ? engSetsM(o.parts[0].take, o.model) : null;
+      const n = await window.H3Combine({parts:(o.parts || []).map(q => ({take:q.take, in:+q.a || 0, out:+q.b})), seam:Object.assign({rk:uid('k'), unet:pk, qw:o.qw || '', half:Math.max(2, Math.min(24, +o.half || BRIDGE_HALF))}, sets ? {sets} : {})});
       const ids = newIds(b); return n && ids.length ? {id:ids[0]} : {err:'Not sent'}; },
     final:async o => { const van = o.hm==='minimax', tri = o.hm==='triprism', pk = van ? vanUnet() : tri ? triUnet() : hqUnets().find(x => /prism_?pika/i.test(x)) || '', ids = []; let ch = null; /* (Jordan 2026-11-27) o.hm 'triprism' = TriPRISM does the ✨ pass, on PIKA's 8-step curve */ // (Jordan 2026-11-27: "hires with minimax") o.hm 'minimax' = vanilla H3 Reference does the ✨ pass
       if(van && !pk) return {err:'No PC lists the MiniMax H3 Reference model yet'}; if(tri && !pk) return {err:'No PC lists the TriPRISM model yet'};
