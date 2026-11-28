@@ -138,11 +138,41 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const un = G ? Object.values(G.g).filter(n => n.class_type==='UNETLoader').map(n => n.inputs.unet_name) : [];
     ok(tk.seam && /ref2va/.test(tk.model) && tk.fin && un.some(u => /ref2va/.test(u)) && un.some(u => /prismPIKA/.test(u)), '🧵 H3 Reference → PIKA finish repaints the seam on both models (' + JSON.stringify({tk, un}) + ')');
     await finish(); await page.evaluate(() => REEL.pairTick()); await page.waitForTimeout(1000); }
+  // ⬆ Upscale this option with changed words; ✂ Edit › 🎨 Change it with a Model pick on the upscaled option comes back upscaled (Jordan 2026-11-28)
+  { await page.evaluate(() => REEL.go(1)); await page.waitForTimeout(400); await page.click('#upOne'); await page.waitForTimeout(300);
+    const w0 = await page.evaluate(() => document.querySelector('#upW').value);
+    ok(/part 2/.test(w0), '⬆ the upscale sheet shows the words (' + JSON.stringify(w0) + ')');
+    await page.fill('#upW', 'Mia twirls her red umbrella in the rain'); await page.click('#upN [data-v="1"]').catch(() => {});
+    n0 = graphs().length; const nT = await eng.evaluate(() => H3.S.takes.length); await page.click('#upGo');
+    for(let k = 0; k < 20 && await eng.evaluate(n => H3.S.takes.length===n, nT); k++) await page.waitForTimeout(300);
+    const u = await eng.evaluate(() => { const t = H3.S.takes[0]; return {prompt:t.prompt, scale:t.up && t.up.scale, id:t.id}; });
+    ok(u.scale > 1 && /<Subject 1> twirls her red umbrella in the rain/.test(u.prompt), '⬆ the ✨ pass gets the changed words (' + JSON.stringify(u) + ')');
+    await finish(); await page.evaluate(() => { REEL.upAfterTick(); }); await page.waitForTimeout(300);
+    const upId = await page.evaluate(() => { const c = REEL.cur(), id = c.takes.find(x => (c.meta[x] || {}).fin); c.pick = id; REEL.refresh(); return id; }); await page.waitForTimeout(400);
+    ok(!!upId && await page.evaluate(() => REEL.cur().tw[REEL.cur().pick]==='Mia twirls her red umbrella in the rain'), '⬆ the upscaled option keeps the changed words');
+    await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="change"]'); await page.waitForTimeout(300);
+    const cm = await page.evaluate(() => ({op:[...document.querySelectorAll('#edCM option')].map(o => o.value), note:/upscaled too/.test(document.querySelector('#edCh').textContent)}));
+    ok(cm.op.length >= 3 && cm.note, '🎨 Change it has a Model pick and says the change comes back upscaled (' + JSON.stringify(cm) + ')');
+    const pk = cm.op.find(v => /prismpika/.test(v)); await page.selectOption('#edCM', pk); await page.fill('#edW', 'Mia closes her umbrella');
+    const nT2 = await eng.evaluate(() => H3.S.takes.length); await page.click('#edCGo');
+    for(let k = 0; k < 40 && await page.evaluate(() => !!document.querySelector('#edCGo')); k++) await page.waitForTimeout(300);
+    const ch = await eng.evaluate(() => { const t = H3.S.takes[0]; return {id:t.id, model:t.model, redo:!!t.redo, up:!!t.up}; }), m0 = await page.evaluate(() => REEL.S().reelModel || REEL.E().look().model);
+    const meta = await page.evaluate(id => (REEL.cur().meta[id] || {}), ch.id);
+    ok(ch.redo && !ch.up && ch.model===pk && meta.upAfter && !meta.fin && !/prismpika/.test(m0), '🎨 the change runs on the picked model (Settings untouched) and is marked to be upscaled (' + JSON.stringify({ch, upAfter:meta.upAfter, m0}) + ')');
+    await page.evaluate(id => { REEL.cur().pick = id; }, ch.id);
+    await finish(); const nT3 = await eng.evaluate(() => H3.S.takes.length); await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(1500);
+    const au = await eng.evaluate(n => H3.S.takes.length > n ? {scale:H3.S.takes[0].up && H3.S.takes[0].up.scale, id:H3.S.takes[0].id, src:H3.S.takes[0].redo && H3.S.takes[0].redo.src} : null, nT3);
+    const pc = await page.evaluate(() => { const c = REEL.cur(); return {pick:c.pick, m:c.meta[c.pick]}; });
+    ok(au && au.scale > 1 && au.src===ch.id && pc.pick===au.id && pc.m.fin && pc.m.src===ch.id, '⬆ once done, the change gets the ✨ upscale and that version is picked (' + JSON.stringify({au, pc}) + ')');
+    await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(800);
+    ok(await eng.evaluate(n => H3.S.takes.filter(t => t.redo && t.redo.src===n).length, ch.id)===1, '⬆ only one upscale per change');
+    for(let k = 0; k < 3; k++){ await finish(); await page.evaluate(() => REEL.upAfterTick()); await page.waitForTimeout(800); } await finish();
+    ok(await page.evaluate(() => REEL.clips().every(c => c.takes.every(id => !(c.meta[id] || {}).upAfter || (c.meta[id].upAfter || {}).sent))), '⬆ every change option of the upscaled clip got its upscale'); }
   // ➕ Next gets the keep line after the [0s-1s] anchor (never inside it)
   { const r = await page.evaluate(async () => { const cs = REEL.clips(), x = await REEL.E().carry({take:cs[2].pick, at:REEL.info(cs[2].pick).secs, words:'Mia sits down', who:['Lmia'], n:1}); return x; });
     const p = await eng.evaluate(() => H3.S.takes[0].prompt);
     ok(/^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] The room, the objects and the light stay exactly as they were a moment ago\. <Subject 1> sits down$/.test(p) && !/same people/.test(p), '➕ Next: the anchor stays first, the room-only keep line opens the [1s-] part (' + JSON.stringify(p) + ')'); }
-  { const p = await page.evaluate(async () => { const E = REEL.E(), cs = REEL.clips(); await E.fill({takeA:cs[0].pick, outA:1, takeB:cs[1].pick, inB:0, secs:1, words:'Mia waves', who:['Lmia'], n:1, keep:false}); return 1; });
+  { const p = await page.evaluate(async () => { const E = REEL.E(), cs = REEL.clips(); return await E.fill({takeA:cs[0].pick, outA:1, takeB:cs[1].takes[0], inB:0, secs:1, words:'Mia waves', who:['Lmia'], n:1, keep:false}); });
     const q = await eng.evaluate(() => H3.S.takes[0].prompt); ok(!/room, the objects/.test(q), 'keep:false leaves the line out (' + JSON.stringify(q) + ')'); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
