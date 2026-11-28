@@ -3964,6 +3964,27 @@ window.H3FaceScanGet = async q => { let h = null; try{ h = (await getJ(q.pc + '/
   if(!h.status.completed) return null; const o = (h.outputs || {})[q.node] || {}, f = Object.values(o).flat().find(x => x && x.filename);
   return f ? {url:viewUrl(q.pc, Object.assign({type:'temp'}, f))} : {err:'SAM 3 gave nothing back'}; };
 const sam3Of = oi => combo(oi, 'CheckpointLoaderSimple', 'ckpt_name').find(n => /sam3/i.test(n)) || '';
+// 🎭 who's who for Reel's face pass after the upscale (Jordan 2026-11-28: "scan the whole video and pick out the character faces individually
+// and assign them character refs"): SAM 3 numbers every face over the whole clip as 🔎 does, and the PC hands back a few frames plus each
+// number's mask on those frames (small pictures, no video), so the phone can cut out each numbered face and tell who it is
+const FACE_ID_AT = [0.15, 0.38, 0.62, 0.85];
+function faceIdGraph(fl, oi, F){ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
+  const gc = add('GetVideoComponents', {video:[add('LoadVideo', {file:(fl.subfolder ? fl.subfolder + '/' : '') + fl.filename + ' [output]'}), 0]}), ck = add('CheckpointLoaderSimple', {ckpt_name:sam3Of(oi)});
+  const trk = faceTrack(add, ck, [gc, 0], 'face'), at = FACE_ID_AT.map(x => Math.max(0, Math.min(F - 1, Math.round(x * (F - 1)))));
+  const frames = at.map(i => add('PreviewImage', {images:[add('ImageFromBatch', {image:[gc, 0], batch_index:i, length:1}), 0]}));
+  const objs = []; for(let j = 0; j < FACE_SCAN.max; j++){ const mi = [add('MaskToImage', {mask:[add('SAM3_TrackToMask', {track_data:[trk, 0], object_indices:String(j)}), 0]}), 0];
+    objs.push(at.map(i => add('PreviewImage', {images:[add('ImageFromBatch', {image:mi, batch_index:i, length:1}), 0]}))); }
+  return {g, frames, objs}; }
+window.H3FaceIdScan = async o => { const src = deckTake(o.take), fl = takeFile(src); if(!src || !fl) return {err:'That clip has no finished video yet'};
+  const p = pcOf(src.pc); if(!p.online || !p.oi) return {err:pcName(src.pc) + " can't be reached right now"};
+  if(!p.oi.SAM3_VideoTrack || !p.oi.SAM3_TrackToMask || !p.oi.MaskToImage || !p.oi.PreviewImage || !sam3Of(p.oi)) return {err:pcName(src.pc) + ' has no SAM 3, so it can\'t find faces'};
+  const G = faceIdGraph(fl, p.oi, takeFrames(src));
+  try{ const pid = await queueGraph(src.pc, G, true); return {pc:src.pc, pid, frames:G.frames, objs:G.objs}; }catch(e){ return {err:'Not sent: ' + e.message}; } };
+window.H3FaceIdGet = async q => { let h = null; try{ h = (await getJ(q.pc + '/history/' + q.pid))[q.pid]; }catch(e){ return null; } if(!h || !h.status) return null;
+  if(h.status.status_str==='error') return {err:((h.status.messages || []).find(x => x[0]==='execution_error') || [0, {}])[1].exception_message || 'it failed'};
+  if(!h.status.completed) return null; const O = h.outputs || {}, url = id => { const f = Object.values(O[id] || {}).flat().find(x => x && x.filename); return f ? viewUrl(q.pc, Object.assign({type:'temp'}, f)) : ''; };
+  return {frames:q.frames.map(url), objs:q.objs.map(a => a.map(url))}; };
+
 const REGEN_REFS = 3; // reference pictures cost tokens at the new size, so only the first few go in (8 GB card)
 // Jordan 2026-11-08: a ✨ pass on two characters lost the second one's likeness: the first 3 pictures were all the first
 // subject's. Now each subject gets its best picture first (taking turns), and with 4 subjects up to 4 go in.
@@ -7006,6 +7027,7 @@ if(ENGINE){
     faceScan:async o => { const t = deckTake(o.take); if(!t || !takeFile(t)) return {err:'That clip has no finished video yet'};
       const q = await window.H3FaceScan({take:t.id, a:0, b:takeFrames(t) / FPS, word:'face'}); return q || {err:"Couldn't start the face finder"}; },
     faceScanGet:q => window.H3FaceScanGet(q),
+    faceId:o => window.H3FaceIdScan(o), faceIdGet:q => window.H3FaceIdGet(q), // (🎭 who's who after the upscale, 2026-11-28)
     faces:async o => { const t = deckTake(o.take), fl = t && takeFile(t); if(!fl) return {err:'That clip has no finished video yet'};
       const fs = (o.faces || []).map(f => { const L = libOf(f.lib); if(!L || !(+f.obj >= 0)) return null; const c = libToCast(L); libFill(c, L); return {n:c.n, obj:+f.obj}; }).filter(Boolean);
       if(!fs.length) return {err:'Pick whose face is whose first'};
